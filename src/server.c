@@ -1,4 +1,3 @@
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,7 +64,10 @@ int main(int argc,char *argv[]){
 			}
 		}
 
-		MINUS_ONE_EXIT(config_file_parser(buffer,&configs),"config tokenization");
+		if(config_file_parser(buffer,&configs) == -1){
+			printf("config file: error\n");
+			exit(EXIT_FAILURE);
+		}
 		i++;
 	}
 
@@ -76,9 +78,12 @@ int main(int argc,char *argv[]){
 
 
 
-
-int config_file_parser(char *stringa, config_parameters* cfg) {
-	char *tmpstr;
+/*funzione che parsa gli argomenti del config file e ritorna -1
+*in caso il valore associato a una variabile non sia un numero oppure
+*il numero passato è negativo o zero.
+*/
+int config_file_parser(char *stringa, config_parameters* cfg) {		
+	char *tmpstr;													
 	char *token = strtok_r(stringa, "=", &tmpstr);
 
 	while (token) {
@@ -87,6 +92,10 @@ int config_file_parser(char *stringa, config_parameters* cfg) {
 			token[strcspn(token, "\n")] = '\0';
 			if(isNumber(token,&(cfg->NUM_THREADS)) != 0)
 				return -1;
+			if(cfg->NUM_THREADS <= 0){
+				printf("a value is non positive\n");
+				return -1;
+			}
 		}
 
 		else if(strncmp("MAX_FILE_NUMBER",token,16) == 0){
@@ -94,6 +103,10 @@ int config_file_parser(char *stringa, config_parameters* cfg) {
 			token[strcspn(token, "\n")] = '\0';
 			if(isNumber(token,&(cfg->MAX_FILE_NUMBER)) != 0)
 				return -1;
+			if(cfg->MAX_FILE_NUMBER <= 0){
+				printf("a value is non positive\n");
+				return -1;
+			}
 		}
 
 		else if(strncmp("SERVER_CAPACITY_MBYTES",token,23) == 0){
@@ -101,6 +114,10 @@ int config_file_parser(char *stringa, config_parameters* cfg) {
 			token[strcspn(token, "\n")] = '\0';
 			if(isNumber(token,&(cfg->SERVER_CAPACITY_MBYTES)) != 0)
 				return -1;
+			if(cfg->SERVER_CAPACITY_MBYTES <= 0){
+				printf("a value is non positive\n");
+				return -1;
+			}
 		}
 
 	token = strtok_r(NULL, "=", &tmpstr);
