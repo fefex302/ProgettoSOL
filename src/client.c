@@ -28,6 +28,7 @@
     exit(EXIT_FAILURE);			\
   }
 int parse_arguments(char *buf,char *buf2[]);
+int help();
 
 int main(int argc,char* argv[]){
 
@@ -52,12 +53,12 @@ int main(int argc,char* argv[]){
 				printf("%d = %s\n",i,string_buffer[i]);
 		}
 		optind = 1;
-		while ((opt = getopt(n,string_buffer, ":h:f:w:W:r:R:d:t:l:u:c:p")) != -1) {
+		while ((opt = getopt(n,string_buffer, "hf:w:W:r:R::d:t::l:u:c:p")) != -1) {
 		    switch(opt) {
 				case 'h': //arg_h(optarg); 
-					printf("arg = %s\n",optarg);
+					help();
 					break;
-				case 'f': //arg_m(optarg);  
+				case 'f': //arg_m(optarg);
 					printf("arg = %s\n",optarg);
 					break;
 				case 'w': //arg_o(optarg);  
@@ -66,7 +67,8 @@ int main(int argc,char* argv[]){
 					break;
 				case 'r': //arg_h(argv[0]); 
 					break;
-				case 'R': //arg_h(argv[0]); 
+				case 'R': //arg_h(argv[0]);
+					printf("R con argomenti\n");
 					break;
 				case 'd': //arg_h(argv[0]); 
 					break;
@@ -81,12 +83,12 @@ int main(int argc,char* argv[]){
 				case 'p': //arg_h(argv[0]); 
 					break;
 				case ':': {
-				      printf("l'opzione '-%c' richiede un argomento\n", optopt);
+			   		printf("l'opzione '-%c' richiede un argomento\n", optopt);
 				    } break;
-				    case '?': {  // restituito se getopt trova una opzione non riconosciuta
+				case '?': {  // restituito se getopt trova una opzione non riconosciuta
 				      printf("l'opzione '-%c' non e' gestita\n", optopt);
 				    } break;
-				    default:;
+				default:;
     		}
     		printf("qui\n");
   		}
@@ -124,4 +126,24 @@ int parse_arguments(char *buf,char *buf2[]){
 
     buf2[BUF_LEN_2 - 1] = NULL;
     return n;
+}
+
+
+int help(){
+	printf("%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n",
+			"Opzioni accettate dal client: ",
+			"-h",
+			"-f filename",
+			"-wdirname[,n=0]",
+			"-W file1[,file2]",
+			"-r file1[,file2]",
+			"-R[n=0]",
+			"-d dirname",
+			"-t time",
+			"-l file1[,file2]",
+			"-u file1[,file2]",
+			"-c file1[,file2]",
+			"-p");
+	return 1;
+
 }
