@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <sys/un.h>
+#include <fcntl.h>
 
 #include <assert.h>
 #include "api.h"
@@ -40,7 +41,8 @@ static int flag_f = 0;	//variabile che identifica se la connessione col socket �
 int parse_arguments(char *buf,char *buf2[]);
 int help();
 int f_req(char* args);
-
+int disconnect(char *args);
+int W_req(char* args);
 int main(int argc,char* argv[]){
 
 	int opt;
@@ -52,7 +54,7 @@ int main(int argc,char* argv[]){
 		string_buffer[i] = NULL;
 	int end = 0;	//usato per terminare il client
 	int restart = 0;	//usato per ricominciare il parse degli argomenti quando leggo qualcosa di sbagliato
-	//int h,f,w,W,r,R,d,t,l,o;
+	char *sockname = NULL;
 
 	int flag_p = 0;
 
@@ -107,8 +109,10 @@ int main(int argc,char* argv[]){
 					if(flag_p)
 						printf("tentativo di connessione con il socket %s\n",optarg);
 					if(!flag_f){
-						if(f_req(optarg)== 0)
+						if(f_req(optarg)== 0){
 							flag_f = 1;
+							NULL_EXIT(sockname = malloc(strlen(optarg)+1),"malloc");
+						}
 						else{
 							printf("connessione con il server fallita\n");
 							restart = 1;
@@ -120,7 +124,8 @@ int main(int argc,char* argv[]){
 					break;
 				case 'w': //arg_o(optarg);  
 					break;
-				case 'W': //arg_h(argv[0]); 
+				case 'W': 
+					W_req(optarg);
 					break;
 				case 'r': //arg_h(argv[0]); 
 					break;
@@ -164,7 +169,9 @@ int main(int argc,char* argv[]){
          	}
         }
 	}
-  return 0;
+	if(sockname != NULL)
+		disconnect(sockname);
+  	return 0;
 
 
 
@@ -242,29 +249,27 @@ int disconnect(char *args){
 	return closeConnection(args);
 }
 
-int read_file(int fd_file, char *file_path, char *file_return){		//legge un file e restituisce nel campo file_return 
-	fd_file = open(file_path,O_RDONLY);								//una stringa contenente tutti i bit del file
-	struct stat buf;
-	MINUS_ONE_EXIT(fstat(fd_file, &buf),"fstat");
-
-	size_t size = buf.st_size;
-
-	NULL_EXIT(file_return = malloc(size),"malloc");
+int W_req(char *args){				//args lista di file da scrivere separati da virgola
+	char *buf[BUF_LEN];				//buffer che mi conterrà tutti i nomi dei file da passare
+	char *tmpstr;													
+	char *token = strtok_r(args, ",", &tmpstr);
+	int i = 0;
 	
-	return readn(fd_file,file_return,size);
-}
+	while (token) {
+		if(i == BUF_LEN){
+			printf("superati i %d files, scrittura fino al file %s\n",BUF_LEN,token);
+		}
+		buf[i] = calloc(strlen(token)+1,sizeof(char));
 
+		NULL_EXIT(buf[i],"malloc");			
 
-int open_file(char *file_to_read,char *path_to_dir){		//legge il file contenuto nella stringa e se una cartella
-	if(path_to_dir == NULL)									//di salvataggio è settata allora crea un file in quella cartella
-		return 0;		
-
-	size_t size = strlen(file_to_read);
-
-	int fd_file;
-
-	fd_file = open(path_to_dir, O_CREAT|O_WRONLY, 0666);
-
-	return writen(esempio2,file_return,size);
+		memset(buf[i],'\0',sizeof(char));
+    	//buf2[i] = token;
+    	strncpy(buf[i],token,strlen(token)+1);
+    	token = strtok_r(NULL, ",", &tmpstr);
+    	printf("%s\n",buf[i]);
+    	i++;
+    }
+    return 0;
 
 }
