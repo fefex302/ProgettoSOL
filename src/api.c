@@ -72,13 +72,15 @@ int openConnection( const char* sockname, int msec,const struct timespec abstime
 
         nanosleep(&sleeptime, &time_request);
 
-        if(clock_gettime(CLOCK_REALTIME, &current_time) == -1)
+        if(clock_gettime(CLOCK_REALTIME, &current_time) == -1){
+        	//close(client_fd);
             return -1;
+        }
 
     }while(current_time.tv_sec < abstime.tv_sec ||
         current_time.tv_nsec < abstime.tv_nsec);
 
-    return 0;
+    return -1;
 }
 
 
@@ -94,4 +96,31 @@ int closeConnection( const char* sockname ){
         errno = EFAULT;
         return -1;
     }
+}
+
+static int read_file(int fd_file, char *file_path, char *file_return){		//legge un file e restituisce nel campo file_return 
+	fd_file = open(file_path,O_RDONLY);								//una stringa contenente tutti i bit del file
+	struct stat buf;
+	MINUS_ONE_EXIT(fstat(fd_file, &buf),"fstat");
+
+	size_t size = buf.st_size;
+
+	NULL_EXIT(file_return = malloc(size),"malloc");
+	
+	return readn(fd_file,file_return,size);
+}
+
+
+static int open_file(char *file_to_read,char *path_to_dir){		//legge il file contenuto nella stringa e se una cartella
+	if(path_to_dir == NULL)									//di salvataggio è settata allora crea un file in quella cartella
+		return 0;		
+
+	size_t size = strlen(file_to_read);
+
+	int fd_file;
+
+	fd_file = open(path_to_dir, O_CREAT|O_WRONLY, 0666);
+
+	return writen(fd_file,file_to_read,size);
+
 }
