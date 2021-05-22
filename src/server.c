@@ -3,13 +3,16 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #include "utils.h"
 #include "hash.h"
 
 #define BUF_LEN 100
+#define SOCKNAME "./sock"
 
-//#include "hash.h"
 #define NULL_EXIT(X,str)	\
   if ((X)==NULL) {			\
     perror(#str);			\
@@ -41,6 +44,9 @@ typedef struct _output{
 	int replace_algo;
 }output_info;
 
+void cleanup() {
+    unlink(SOCKNAME);
+}
 int config_file_parser(char *stringa, config_parameters* cfg);
 int config_values_correctly_initialized(config_parameters *cfg);
 
@@ -48,7 +54,7 @@ static config_parameters configs;		//parametri di configurazione passati dal fil
 static hashtable *file_server;			//hashtable dove andrò a memorizzare tutti i file
 
 int main(int argc,char *argv[]){
-
+	cleanup();
 	if(argc != 2){
 		printf("you must use a config file\n");
 		return EXIT_FAILURE;
@@ -90,22 +96,71 @@ int main(int argc,char *argv[]){
 	//fprintf(stdout,"%ld %ld %ld\n",configs.NUM_THREADS,configs.MAX_FILE_NUMBER,configs.SERVER_CAPACITY_MBYTES);
 	fclose(config_file);
 
+    int listenfd;
+    listenfd = socket(AF_UNIX, SOCK_STREAM, 0);
 
-	fileT *file1;
-	char *name1 = malloc(5 * sizeof(char));
-	strncpy(name1,"aaaa",5);
-	char *content1 = malloc(5 * sizeof(char));
-	strncpy(content1,"bbbb",5);
+    struct sockaddr_un serv_addr;
+    memset(&serv_addr, '0', sizeof(serv_addr));
+    serv_addr.sun_family = AF_UNIX;    
+    strncpy(serv_addr.sun_path, SOCKNAME, strlen(SOCKNAME)+1);
 
-	file_server = icl_hash_create(5, &hash_pjw, &string_compare);
+    int notused;
+    notused = bind(listenfd, (struct sockaddr*)&serv_addr,sizeof(serv_addr));
+    notused = listen(listenfd, MAXBACKLOG);
+
+        
+	long connfd;
+	connfd = accept(listenfd, (struct sockaddr*)NULL ,NULL);
+	printf("connection accepted\n");    	
+
+	do {
+        int dimpath;
+        size_t dimfile;
+        char* path;
+        char* file_client;
+        int n;
+        int re;
+
+        n = readn(connfd, &re, sizeof(int));
+        if (n<=0) break;
+
+        printf("richiesta: %d\n",re);
+        
+        n = readn(connfd, &dimpath, sizeof(dimpath));
+        if (n<=0) break;
+
+        printf("dimpath: %zu\n",dimpath);
+
+        path = malloc(dimpath);
+        n = readn(connfd, path, dimpath);
+        if (n<=0) break;
+
+        printf("path: %s\n", path);
+
+        n = readn(connfd, &dimfile, sizeof(dimfile));
+        if (n<=0) break;
+
+        printf("dimfile: %zu\n",dimfile);
+
+        file_client = malloc(dimfile);
+
+        n = readn(connfd, file_client, dimfile);
+        if (n<=0) break;
+
+        printf("dimfile2: %d\n",strlen(file_client));
+        
+    } while(1);
+
+    close(connfd);	
+
+	/*file_server = icl_hash_create(5, &hash_pjw, &string_compare);
 
 	file1 = icl_hash_insert(file_server,(void *) name1,(void *) content1);
 	file1->size = 5;
 	printf("key: %s content: %s size: %zu\n",(char *)file1->key,(char *)file1->data,file1->size);
-
+*/
 	return 0;
 }
-
 
 
 int config_values_correctly_initialized(config_parameters *cfg){
