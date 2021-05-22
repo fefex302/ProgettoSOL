@@ -55,7 +55,7 @@
 static int client_fd;
 static int connection_active = 0;
 static struct sockaddr_un server_address;
-size_t gvar = 0;
+int print_flag = 0;
 
 //*************************************FUNZIONI STATICHE DI UTILITÀ***************************************************************
 static char* read_file(int fd_file,const char *file_path, size_t *size){		//legge un file e restituisce nel campo file_return 
@@ -174,14 +174,26 @@ int openFile(const char* pathname, int flags){
 	}
 
 	int request;
-	if(flags == 0)
+	if(flags == 0){
+		if(print_flag)
+			printf("richiesta di apertura in sola lettura del file <%s>\n",pathname);
 		request = OPN;
-	else if(flags == O_CREATE)
+	}
+	else if(flags == O_CREATE){
+		if(print_flag)
+			printf("richiesta di apertura in modalità creazione del file <%s>\n",pathname);
 		request = OPNC;
-	else if(flags == O_LOCK)
+	}
+	else if(flags == O_LOCK){
+		if(print_flag)
+			printf("richiesta di apertura in modalità locked del file <%s>\n",pathname);
 		request = OPNL;
-	else if(flags == O_LOCK_CREATE)
+	}
+	else if(flags == O_LOCK_CREATE){
+		if(print_flag)
+			printf("richiesta di apertura in modalità locked e creazione del file <%s>\n",pathname);
 		request = OPNCL;
+	}
 
 	int answer;
 
@@ -194,6 +206,30 @@ int openFile(const char* pathname, int flags){
 
 	if(writen(client_fd, pathname, lenght) == -1)				//mando il pathname
 		return -1;
+
+	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
+		return -1;
+
+	if(answer == -1){
+		errno = ECANCELED;
+		return -1;
+	}
+
+	if(print_flag)
+			printf("la richiesta di apertura del file <%s> ha avuto successo\n",pathname);
+	return 0;
+
+
+}
+
+int writeFile(const char* pathname, const char*dirname){
+
+	if(openFile(pathname,O_LOCK_CREATE) == -1){
+		if(print_flag)
+			printf("richiesta di scrittura del file <%s> fallita\n",pathname);
+		errno = ECANCELED;
+		return -1;
+	}
 
 	int fd_file;
 	char* file_to_send = NULL;
@@ -208,7 +244,9 @@ int openFile(const char* pathname, int flags){
 	if(writen(client_fd, file_to_send, size) == -1)				//mando il file
 		return -1;
 
-	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//mando il tipo di richiesta
+	int answer;
+
+	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
 		return -1;
 
 	if(answer == -1){
@@ -216,8 +254,18 @@ int openFile(const char* pathname, int flags){
 		return -1;
 	}
 
-	gvar = size;
-	return 0;
+	//protocollo di risposta del server: se va tutto bene ritorno il numero di file
+	//rimpiazzati nel server per fare spazio al file spedito, che può essere un numero che
+	//va da 0 in poi, quindi ciclerò un numero di volte pari al valore di risposta e memorizzerò
+	//i file nella cartella indicata se questa è diversa da NULL
+	if(dirname != NULL){			
+		printf("ancora da fare\n");
+	}
 
+	if(print_flag){
+		printf("la richiesta di scrittura del file <%s> ha avuto successo\n",pathname);
+		printf("bytes scritti: %zu\n",size);
+	}
+	return 0;
 
 }
