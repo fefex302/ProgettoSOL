@@ -20,6 +20,8 @@
 #define MSEC 10
 
 static int flag_f = 0;	//variabile che identifica se la connessione col socket è stata effettuata o meno
+static int flag_p = 0;	//variabile che identifica se la stampa delle operazioni è abilitata
+extern size_t gvar;
 
 #define NULL_EXIT(X,str)	\
   if ((X)==NULL) {			\
@@ -55,8 +57,6 @@ int main(int argc,char* argv[]){
 	int end = 0;	//usato per terminare il client
 	int restart = 0;	//usato per ricominciare il parse degli argomenti quando leggo qualcosa di sbagliato
 	char *sockname = NULL;
-
-	int flag_p = 0;
 
 	while(!end){
 		restart = 0;
@@ -250,26 +250,30 @@ int disconnect(char *args){
 }
 
 int W_req(char *args){				//args lista di file da scrivere separati da virgola
-	char *buf[BUF_LEN];				//buffer che mi conterrà tutti i nomi dei file da passare
+									//buffer che mi conterrà tutti i nomi dei file da passare
 	char *tmpstr;													
 	char *token = strtok_r(args, ",", &tmpstr);
 	int i = 0;
 	
 	while (token) {
-		if(i == BUF_LEN){
-			printf("superati i %d files, scrittura fino al file %s\n",BUF_LEN,token);
+		if(flag_p)
+			printf("richiesta di scrittura del file <%s>\n",token);
+
+		if(openFile(token,O_CREAT) == 0){
+			if(flag_p){
+				printf("la richiesta di scrittura del file <%s> ha avuto successo\n",token);
+				printf("numero di bytes scritti: %d\n",gvar);
+			}
 		}
-		buf[i] = calloc(strlen(token)+1,sizeof(char));
+		else{
+			if(flag_p)
+				printf("richiesta di scrittura del file <%s> è fallita\n",token);
+		}
 
-		NULL_EXIT(buf[i],"malloc");			
-
-		memset(buf[i],'\0',sizeof(char));
-    	//buf2[i] = token;
-    	strncpy(buf[i],token,strlen(token)+1);
     	token = strtok_r(NULL, ",", &tmpstr);
-    	printf("%s\n",buf[i]);
-    	i++;
+    	
     }
+   
     return 0;
 
 }
