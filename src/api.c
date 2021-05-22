@@ -22,18 +22,6 @@
 #include "api.h"
 #include "utils.h"
 
-#define OPN 	1;	//open
-#define OPNC 	2;	//open create mode
-#define OPL 	3;	//open lock mode
-#define OPNL 	4;	//open create and lock mode
-#define RD 		5;	
-#define RDN 	4;
-#define APP 	5;
-#define LO 		6;
-#define UN 		7;
-#define CLS 	8;
-#define RM 		9;
-
 #define NULL_EXIT(X,str)	\
   if ((X)==NULL) {			\
     perror(#str);			\
@@ -58,23 +46,37 @@
     return -1;			\
   }
 
+#define MINUS_ONE_RETURN_NULL(X,str)\
+  if ((X)==-1) {			\
+    perror(#str);			\
+    return NULL;			\
+  }
+
 static int client_fd;
 static int connection_active = 0;
 static struct sockaddr_un server_address;
 size_t gvar = 0;
 
 //*************************************FUNZIONI STATICHE DI UTILITÀ***************************************************************
-static int read_file(int fd_file,const char *file_path, char *file_return, size_t *size){		//legge un file e restituisce nel campo file_return 
-	fd_file = open(file_path,O_RDONLY);															//una stringa contenente tutti i bit del file
+static char* read_file(int fd_file,const char *file_path, size_t *size){		//legge un file e restituisce nel campo file_return 
+	
+	if((fd_file = open(file_path,O_RDONLY)) == -1)
+		return NULL;															//una stringa contenente tutti i bit del file
 	
 	struct stat buf;
-	MINUS_ONE_RETURN(fstat(fd_file, &buf),"fstat");
+	MINUS_ONE_RETURN_NULL(fstat(fd_file, &buf),"fstat");
 
 	*size = buf.st_size;
+	char *file_return;
 
-	file_return = malloc(buf.st_size);
+	if((file_return = malloc(buf.st_size+1)) == NULL)
+		return NULL;
 	
-	return readn(fd_file, file_return, buf.st_size);
+	if(readn(fd_file, file_return, buf.st_size+1) == -1)
+		return NULL;
+
+	return file_return;
+
 }
 
 
@@ -86,7 +88,8 @@ static int open_file(const char *file_to_read,char *path_to_dir){		//legge il fi
 
 	int fd_file;
 
-	fd_file = open(path_to_dir, O_CREAT|O_WRONLY, 0666);
+	if((fd_file = open(path_to_dir, O_CREAT|O_WRONLY, 0666)) == -1)
+		return -1;
 
 	return writen(fd_file,file_to_read,size);
 
@@ -171,37 +174,50 @@ int openFile(const char* pathname, int flags){
 	}
 
 	int request;
-
-	if(flags == O_CREAT){
+	if(flags == 0)
+		request = OPN;
+	else if(flags == O_CREATE)
 		request = OPNC;
-		printf("request\n");
-		if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
-			return -1;
+	else if(flags == O_LOCK)
+		request = OPNL;
+	else if(flags == O_LOCK_CREATE)
+		request = OPNCL;
 
-		int lenght = strlen(pathname)+1;
-		if(writen(client_fd, &lenght, sizeof(int)) == -1)		//mando la lunghezza del pathname
-			return -1;
+	int answer;
 
-		if(writen(client_fd, pathname, lenght) == -1)				//mando il pathname
-			return -1;
+	if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
+		return -1;
 
-		int fd_file;
-		char* file_to_send;
-		size_t size;
+	int lenght = strlen(pathname)+1;
+	if(writen(client_fd, &lenght, sizeof(int)) == -1)		//mando la lunghezza del pathname
+		return -1;
 
-		if(read_file(fd_file, pathname, file_to_send, &size) == -1)
-			return -1;
+	if(writen(client_fd, pathname, lenght) == -1)				//mando il pathname
+		return -1;
 
-		printf("dim file client %s\n",strlen(file_to_send));
-		if(writen(client_fd, &size, sizeof(size)) == -1)			//mando la lunghezza del file
-			return -1;
+	int fd_file;
+	char* file_to_send = NULL;
+	size_t size;
 
+	if((file_to_send = read_file(fd_file, pathname, &size)) == NULL)
+		return -1;
 
-		if(writen(client_fd, file_to_send, size) == -1)				//mando il file
-			return -1;
+	if(writen(client_fd, &size, sizeof(size)) == -1)			//mando la lunghezza del file
+		return -1;
 
-		gvar = size;
-		return 0;
+	if(writen(client_fd, file_to_send, size) == -1)				//mando il file
+		return -1;
 
+	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//mando il tipo di richiesta
+		return -1;
+
+	if(answer == -1){
+		errno = ECANCELED;
+		return -1;
 	}
+
+	gvar = size;
+	return 0;
+
+
 }
