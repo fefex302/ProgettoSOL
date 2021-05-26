@@ -149,6 +149,8 @@ int closeConnection( const char* sockname ){
     }
 
     if(strncmp(server_address.sun_path, sockname, strlen(sockname)+1) ==  0){
+    	if(writen(client_fd,CLOSE,sizeof(int)) == -1)
+    		return -1;
         return close(client_fd);
     }else{
         errno = EFAULT;
