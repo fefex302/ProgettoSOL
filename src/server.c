@@ -70,6 +70,11 @@ typedef struct _output{
 	int replace_algo;
 }output_info;
 
+typedef struct _clientfiles{
+	int *fdclient;
+	char *filesopened;
+} clientfiles;
+
 void cleanup() {
     unlink(SOCKNAME);
 }
@@ -85,18 +90,21 @@ int updatemax(fd_set set, int fdmax) {
 int config_file_parser(char *stringa, config_parameters* cfg);
 int config_values_correctly_initialized(config_parameters *cfg);
 void *worker_t(void *args);
-
+fileT* opn(int flag,int connfd);
 //***********************************VARIABILI GLOBALI*************************************************************
 
 static config_parameters configs;		//parametri di configurazione passati dal file config.txt
 static hashtable *file_server;			//hashtable dove andrò a memorizzare tutti i file
 static list *requests = NULL;			//lista fifo delle richieste dei client
 static list *last = NULL;				//puntatore all'ultimo elemento della queue
-static int empty = 1;					//variabile che indica se il buffer delle richieste è vuoto o meno
+static int numreq = 0;					//variabile che indica se il buffer delle richieste è vuoto o meno
 static int quit = 0;					//variabile che dice se bisogna uscire dal programma
 static pthread_mutex_t	bufmtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t	servermtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t	bufcond = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t	fdsetmtx = PTHREAD_MUTEX_INITIALIZER;
 static int pfd[2];
+static fd_set set;
 //***********************************MAIN****************************************************************************
 
 int main(int argc,char *argv[]){
@@ -165,7 +173,7 @@ int main(int argc,char *argv[]){
     MINUS_ONE_EXIT(notused = bind(listenfd, (struct sockaddr*)&serv_addr,sizeof(serv_addr)),"bind");
     MINUS_ONE_EXIT(notused = listen(listenfd, MAXBACKLOG),"listen");
 
-    fd_set set, tmpset;
+    fd_set tmpset;
     // azzero sia il master set che il set temporaneo usato per la select
     FD_ZERO(&set);
     FD_ZERO(&tmpset);
@@ -183,14 +191,18 @@ int main(int argc,char *argv[]){
 	    	perror("select");
 	   		return -1;
 		}
+		printf("qua1\n");
 	// cerchiamo di capire da quale fd abbiamo ricevuto una richiesta
 		for(int i=0; i <= fdmax; i++) {
 		    if (FD_ISSET(i, &tmpset)) {
 				long connfd;
+				printf("qua2\n");
 				if (i == listenfd) { // e' una nuova richiesta di connessione 
-					MINUS_ONE_EXIT(accept(listenfd, (struct sockaddr*)NULL ,NULL), "accept");
+					printf("qua3\n");
+					MINUS_ONE_EXIT(connfd = accept(listenfd, (struct sockaddr*)NULL ,NULL), "accept");
 					FD_SET(connfd, &set);  // aggiungo il descrittore al master set
 					if(active_threads < configs.NUM_THREADS){
+						printf("qua4\n");
 						if (pthread_create(&tids[active_threads], NULL, worker_t, NULL) != 0) {
 					    	fprintf(stderr, "pthread_create failed\n");
 	    					exit(EXIT_FAILURE);
@@ -206,21 +218,22 @@ int main(int argc,char *argv[]){
 				// eseguo il comando e se c'e' un errore lo tolgo dal master set
 				int try = 0;
 				int res;
-				while ((res = insert_node(connfd,last)) < 0 && try < 3)
+				FD_CLR(connfd, &set);
+				if (connfd == fdmax) 
+		 				fdmax = updatemax(set, fdmax);
+				while ((res = insert_node(connfd,&last,&requests)) < 0 && try < 3)
 					try ++;
 				if(res < 0){
 					close(connfd); 
-					FD_CLR(connfd, &set); 
-		 			// controllo se deve aggiornare il massimo
-		 			if (connfd == fdmax) 
-		 				fdmax = updatemax(set, fdmax);
-				}
+					// controllo se deve aggiornare il massimo
+		 		}
 				else{
-					empty = 0;
+					numreq ++;
 					SIGNAL(&bufcond);	//sveglio eventuali thread in attesa di richieste
 				}
 		    }
 		}
+
     }
 
     free(tids);
@@ -356,12 +369,154 @@ int config_file_parser(char *stringa, config_parameters* cfg) {
 void *worker_t(void *args){
 	while(!quit){
 		LOCK(&bufmtx);
-		while(empty){
-			WAIT(&bufcond,&bufmtx);
+		while(numreq == 0){
+			WAIT(&bufcond, &bufmtx);
+		}
+		numreq --;
+		list *reqst = remove_node(&requests);
+		
+		UNLOCK(&bufmtx);
+		int codreq = -1;//codice richiesta
+
+		readn(reqst->fd, &codreq, sizeof(int));
+
+		if((int)codreq == CLOSE){
+			close(reqst->fd);
+			return NULL;
+			}
+		switch((int)codreq){
+			case OPN:
+				opn(OPN,reqst->fd);
+				break;
+			case OPNC:
+				opn(OPNC,reqst->fd);
+				break;
+			case OPNL:
+				opn(OPNL,reqst->fd);
+				break;		
+			case OPNCL:
+				opn(OPNCL,reqst->fd); 
+				break;		
+			case RD:	
+				break;	
+			case RDN: 
+				break;	
+			case APP:
+				break;	
+			case LO:
+				break; 		
+			case UN:	
+				break;	
+			case CLS:
+				break;
+			case RM:
+				break;	
+			case CLOSE: 
+				close(reqst->fd);
+				break;
+			case WRT:
+				//wrt(reqst->fd);
+				break;
+			default://in caso di fallimento di lettura della richiesta o richiesta non valida chiudo la connessione
+				close(reqst->fd);
+				break;
+
 		}
 
-
-	
-
 	}
+	return NULL;
+
 }
+
+
+fileT* opn(int flag,int connfd){
+
+		int dimpath;
+	    char* path = NULL;
+	    fileT *tmp = NULL;
+	    int n;
+	    int answer = 0;	//if 0 richiesta andata a buon fine, -1 fallita
+        
+        n = readn(connfd, &dimpath, sizeof(dimpath));		//leggo la dimensione del nome
+        if (n<=0) 
+        	answer = -1;
+
+        path = malloc(dimpath);
+        if(!path)
+        	answer = -1;
+        
+        n = readn(connfd, path, dimpath);						//leggo il nome
+        if (n<=0) 
+        	answer = -1;
+
+        if(answer != -1){
+        	tmp = malloc(sizeof(fileT));
+        	switch(flag){
+        		case OPN:
+        			if(icl_hash_find(file_server, path) == NULL);
+        				answer = -1;
+        			break;
+
+        		case OPNC:
+        			LOCK(&servermtx);
+        			if((tmp = icl_hash_find(file_server, path)) == NULL)
+        				answer = -1;
+	        			    			
+	    			else{
+	    				if(tmp->open_lock)
+	    					answer = -1;
+	    				if(tmp->open_create)
+	    					answer = -1;
+	    				else{
+    						tmp->open_create = 1;
+	    					tmp->user = connfd;
+	    				}
+	    			}
+    				UNLOCK(&servermtx);
+        			break;
+
+        		case OPNL:
+           			LOCK(&servermtx);
+        			if((tmp = icl_hash_find(file_server, path)) == NULL)
+        				answer = -1;
+	        			    			
+	    			else{
+	    				if(tmp->open_lock)
+	    					answer = -1;
+	    				if(tmp->open_create)
+	    					answer = -1;
+	    				else{
+    						tmp->open_lock = 1;
+	    					tmp->user = connfd;
+	    				}
+	    			}
+    				UNLOCK(&servermtx);
+        			break;
+
+        		case OPNCL:
+        			LOCK(&servermtx);
+        			if((tmp = icl_hash_find(file_server, path)) == NULL){
+	        			if((tmp = icl_hash_insert(file_server, path, NULL)) == NULL)
+	    					answer = -1;
+	    				tmp->open_lock = 1;
+	    				tmp->open_create = 1;
+	    				tmp->user = connfd;
+	    			}
+	    			else 
+    					answer = -1;
+    				UNLOCK(&servermtx);
+        			break;
+        	}
+   		}
+   		writen(connfd, answer, sizeof(int));
+   		return tmp;
+}
+/*
+int wrt(int connfd){
+	int answer = 0;
+	fileT *tmp;
+	tmp = opn(OPNCL,connfd);
+	readn();
+	readn();
+	writen();
+}*/
