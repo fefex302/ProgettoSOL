@@ -62,6 +62,7 @@ typedef struct _configs{
 	long NUM_THREADS;
 	long MAX_FILE_NUMBER;
 	long SERVER_CAPACITY_MBYTES;
+	long SERVER_CAPACITY_BYTES;
 }config_parameters;
 
 typedef struct _output{
@@ -90,9 +91,10 @@ int updatemax(fd_set set, int fdmax) {
 int config_file_parser(char *stringa, config_parameters* cfg);
 int config_values_correctly_initialized(config_parameters *cfg);
 void *worker_t(void *args);
+int wrt(int connfd);
 fileT* opn(int flag,int connfd);
 //***********************************VARIABILI GLOBALI*************************************************************
-
+static output_info out_put;
 static config_parameters configs;		//parametri di configurazione passati dal file config.txt
 static hashtable *file_server;			//hashtable dove andrò a memorizzare tutti i file
 static list *requests = NULL;			//lista fifo delle richieste dei client
@@ -105,6 +107,8 @@ static pthread_cond_t	bufcond = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t	fdsetmtx = PTHREAD_MUTEX_INITIALIZER;
 static int pfd[2];
 static fd_set set;
+static long file_slots;
+static long free_bytes;
 //***********************************MAIN****************************************************************************
 
 int main(int argc,char *argv[]){
@@ -151,7 +155,10 @@ int main(int argc,char *argv[]){
 
 	fclose(config_file);
 
-
+	file_slots = configs.MAX_FILE_NUMBER;
+	free_bytes = configs.SERVER_CAPACITY_MBYTES * 1000000;
+	configs.SERVER_CAPACITY_BYTES = free_bytes;
+	file_server = icl_hash_create(50, NULL, NULL);
 
 	pthread_t *tids = malloc(configs.NUM_THREADS * (sizeof(pthread_t)));
 	//inizializzo i tids a 0
@@ -243,74 +250,6 @@ int main(int argc,char *argv[]){
 }
 
 
-
-
-
-
-
-
-
-/*       
-	long connfd;
-	connfd = accept(listenfd, (struct sockaddr*)NULL ,NULL);
-	printf("connection accepted\n");    	
-
-	do {
-        int dimpath;
-        size_t dimfile;
-        char* path = NULL;
-        char* file_client = NULL;
-        int n;
-        int re;
-        int answer = 0;
-
-        n = readn(connfd, &re, sizeof(int));
-        if (n<=0) break;
-
-        printf("richiesta: %d\n",re);
-        
-        n = readn(connfd, &dimpath, sizeof(dimpath));
-        if (n<=0) break;
-
-        printf("dimpath: %zu\n",dimpath);
-
-        path = malloc(dimpath);
-        n = readn(connfd, path, dimpath);
-        if (n<=0) break;
-
-        printf("path: %s\n", path);
-         writen(connfd, &answer, sizeof(answer));
-        n = readn(connfd, &dimfile, sizeof(dimfile));
-        if (n<=0) break;
-
-        printf("dimfile: %zu\n",dimfile);
-
-        file_client = malloc(dimfile);
-
-        n = readn(connfd, file_client, dimfile);
-        if (n<=0) break;
-  
-  
-        writen(connfd, &answer, sizeof(answer));
-		fileT *toput = malloc(sizeof(fileT));
-
-        toput->key = (void *)path;
-        toput->data = (void *)file_client;
-        toput->size = dimfile;
-        toput->next = NULL;
-        free(toput->key);
-        free(toput->data);
-        free(toput);
-        close(connfd);
-        
-    } while(1);
-
-    //close(connfd);
-
-	return 0;
-}*/
-
-
 int config_values_correctly_initialized(config_parameters *cfg){
 	if(cfg->NUM_THREADS <= 0 ){
 		printf("NUM_THREADS wrongly initialized\n");
@@ -384,6 +323,7 @@ void *worker_t(void *args){
 			close(reqst->fd);
 			return NULL;
 			}
+		fileT *tmp;
 		switch((int)codreq){
 			case OPN:
 				opn(OPN,reqst->fd);
@@ -415,7 +355,7 @@ void *worker_t(void *args){
 				close(reqst->fd);
 				break;
 			case WRT:
-				//wrt(reqst->fd);
+				wrt(reqst->fd);
 				break;
 			default://in caso di fallimento di lettura della richiesta o richiesta non valida chiudo la connessione
 				close(reqst->fd);
@@ -423,13 +363,15 @@ void *worker_t(void *args){
 
 		}
 
+		
+
 	}
 	return NULL;
 
 }
 
 
-fileT* opn(int flag,int connfd){
+fileT* opn(int flag, int connfd){
 
 		int dimpath;
 	    char* path = NULL;
@@ -450,7 +392,6 @@ fileT* opn(int flag,int connfd){
         	answer = -1;
 
         if(answer != -1){
-        	tmp = malloc(sizeof(fileT));
         	switch(flag){
         		case OPN:
         			if(icl_hash_find(file_server, path) == NULL);
@@ -495,12 +436,13 @@ fileT* opn(int flag,int connfd){
 
         		case OPNCL:
         			LOCK(&servermtx);
-        			if((tmp = icl_hash_find(file_server, path)) == NULL){
+        			if((tmp = icl_hash_find(file_server, path)) == NULL && file_slots != 0){
 	        			if((tmp = icl_hash_insert(file_server, path, NULL)) == NULL)
 	    					answer = -1;
 	    				tmp->open_lock = 1;
 	    				tmp->open_create = 1;
-	    				tmp->user = connfd;
+	    				int con = connfd;
+	    				tmp->user = con;
 	    			}
 	    			else 
     					answer = -1;
@@ -508,15 +450,52 @@ fileT* opn(int flag,int connfd){
         			break;
         	}
    		}
-   		writen(connfd, answer, sizeof(int));
+   		writen(connfd, &answer, sizeof(int));
    		return tmp;
 }
-/*
+
 int wrt(int connfd){
 	int answer = 0;
 	fileT *tmp;
-	tmp = opn(OPNCL,connfd);
-	readn();
-	readn();
-	writen();
-}*/
+	char *contenuto;
+	size_t dim;
+	//printf("answer: %d\n",answer);
+	if((tmp = opn(OPNCL,connfd)) == NULL)
+		answer = -1;
+	//printf("answer: %d\n",answer);
+
+	if(readn(connfd, &dim, sizeof(size_t)) == -1)
+		answer = -1;
+	//printf("answer: %d\n",answer);
+
+	if((contenuto = malloc(sizeof(char) * dim)) == NULL)
+		answer = -1;
+	//printf("answer: %d\n",answer);
+
+	if(readn(connfd, contenuto, dim) == -1)
+		answer = -1;
+	//printf("answer: %d\n",answer);
+
+	if(dim >= configs.SERVER_CAPACITY_BYTES)
+		answer = -1;
+
+	char *path = tmp->key;
+
+	if(answer != -1){
+		printf("path: %s\n",path);
+		printf("path: %d\n",strlen(path));
+	   	if(tmp->open_lock == 1 && tmp->open_create == 1){
+	    	//if(dim > free_bytes)
+	    		//answer = fifo_replace(dim);
+	    	if(answer != -1){
+	    		tmp->size = dim;
+	    		tmp->data = contenuto;
+	    	}
+	    }
+	}
+	//printf("answer: %d\n",answer);
+	writen(connfd, &answer, sizeof(int));
+	return tmp;
+}
+
+
