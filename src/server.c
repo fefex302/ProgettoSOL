@@ -71,11 +71,6 @@ typedef struct _output{
 	int replace_algo;
 }output_info;
 
-typedef struct _clientfiles{
-	int *fdclient;
-	char *filesopened;
-} clientfiles;
-
 void cleanup() {
     unlink(SOCKNAME);
 }
@@ -88,27 +83,33 @@ int updatemax(fd_set set, int fdmax) {
     return -1;
 }
 
+
 int config_file_parser(char *stringa, config_parameters* cfg);
 int config_values_correctly_initialized(config_parameters *cfg);
 void *worker_t(void *args);
 int wrt(int connfd);
 fileT* opn(int flag,int connfd);
+int cls(char* pathname);
+int rm(int connfd);
+
 //***********************************VARIABILI GLOBALI*************************************************************
-static output_info out_put;
+static output_info out_put;				//dati da stampare a schermo all'uscita del programma
 static config_parameters configs;		//parametri di configurazione passati dal file config.txt
-static hashtable *file_server;			//hashtable dove andrò a memorizzare tutti i file
 static list *requests = NULL;			//lista fifo delle richieste dei client
 static list *last = NULL;				//puntatore all'ultimo elemento della queue
 static int numreq = 0;					//variabile che indica se il buffer delle richieste è vuoto o meno
 static int quit = 0;					//variabile che dice se bisogna uscire dal programma
 static pthread_mutex_t	bufmtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t	servermtx = PTHREAD_MUTEX_INITIALIZER;
+static hashtable *file_server;			//hashtable dove andrò a memorizzare tutti i file
 static pthread_cond_t	bufcond = PTHREAD_COND_INITIALIZER;
-static pthread_mutex_t	fdsetmtx = PTHREAD_MUTEX_INITIALIZER;
 static int pfd[2];
 static fd_set set;
+static pthread_mutex_t	serverstatsmtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t	filesopenedmtx = PTHREAD_MUTEX_INITIALIZER;
 static long file_slots;
 static long free_bytes;
+static listfiles *filesopened = NULL;
 //***********************************MAIN****************************************************************************
 
 int main(int argc,char *argv[]){
@@ -129,7 +130,6 @@ int main(int argc,char *argv[]){
 	configs.SERVER_CAPACITY_MBYTES = 0;
 
 	int active_threads = 0;
-	list *last = NULL;
 	int i;
 
 	for(i=0; i<3; i++){	//mi aspetto n valori da config file
@@ -179,18 +179,20 @@ int main(int argc,char *argv[]){
     int notused;
     MINUS_ONE_EXIT(notused = bind(listenfd, (struct sockaddr*)&serv_addr,sizeof(serv_addr)),"bind");
     MINUS_ONE_EXIT(notused = listen(listenfd, MAXBACKLOG),"listen");
+    MINUS_ONE_EXIT(pipe(pfd),"pipe");
 
     fd_set tmpset;
     // azzero sia il master set che il set temporaneo usato per la select
     FD_ZERO(&set);
     FD_ZERO(&tmpset);
+	FD_SET(pfd[0], &set);
 
     // aggiungo il listener fd al master set
     FD_SET(listenfd, &set);
 
     // tengo traccia del file descriptor con id piu' grande
     int fdmax = listenfd; 
-    MINUS_ONE_EXIT(pipe(pfd),"pipe");
+  	printf("listenfd %d\n",listenfd);
 
     while(!quit){
     	tmpset = set;
@@ -202,6 +204,8 @@ int main(int argc,char *argv[]){
 	// cerchiamo di capire da quale fd abbiamo ricevuto una richiesta
 		for(int i=0; i <= fdmax; i++) {
 		    if (FD_ISSET(i, &tmpset)) {
+		    	printf("i %d\n",i);
+		    
 				long connfd;
 				printf("qua2\n");
 				if (i == listenfd) { // e' una nuova richiesta di connessione 
@@ -218,31 +222,57 @@ int main(int argc,char *argv[]){
 	    					active_threads++;
 					}
 					if(connfd > fdmax) fdmax = connfd;  // ricalcolo il massimo
-						continue;
-				} 
-				connfd = i;  // e' una nuova richiesta da un client già connesso
-			
-				// eseguo il comando e se c'e' un errore lo tolgo dal master set
-				int try = 0;
-				int res;
-				FD_CLR(connfd, &set);
-				if (connfd == fdmax) 
-		 				fdmax = updatemax(set, fdmax);
-				while ((res = insert_node(connfd,&last,&requests)) < 0 && try < 3)
-					try ++;
-				if(res < 0){
-					close(connfd); 
-					// controllo se deve aggiornare il massimo
+				}
+
+
+				else if(i == pfd[0]){// è una scrittura sulla pipe
+					int fdfrompipe;
+					printf("maxfd %d\n",fdmax);
+					MINUS_ONE_EXIT(read(pfd[0], &fdfrompipe, sizeof(int)), "readn");
+					printf("fd %d\n",fdfrompipe);
+					FD_SET(fdfrompipe, &set);
+					if (fdfrompipe > fdmax) 
+		 				fdmax = fdfrompipe;
+		 			printf("maxfd %d\n",fdmax);
+		 			continue;
 		 		}
-				else{
-					numreq ++;
-					SIGNAL(&bufcond);	//sveglio eventuali thread in attesa di richieste
+		 		else{
+		 			printf("nuova richiesta\n");
+					connfd = i;  // e' una nuova richiesta da un client già connesso
+				
+					// eseguo il comando e se c'e' un errore lo tolgo dal master set
+					int try = 0;
+					int res;
+					FD_CLR(connfd, &set);
+
+					if (connfd == fdmax) 
+			 				fdmax = updatemax(set, fdmax);
+
+			 		LOCK(&bufmtx);
+			 		printf("connfd: %d\n",connfd);
+					while ((res = insert_node(connfd,&last,&requests)) < 0 && try < 3)
+						try ++;
+					UNLOCK(&bufmtx);
+					if(res < 0){
+						close(connfd); 
+			 		}
+					else{
+						numreq ++;
+						SIGNAL(&bufcond);	//sveglio eventuali thread in attesa di richieste
+					}
 				}
 		    }
 		}
 
     }
+    int status;
 
+    for(i = 0; i < active_threads; i++){
+    	if (pthread_join(&tids[i], &status) == -1) {
+			fprintf(stderr, "pthread_join failed\n");
+	    	exit(EXIT_FAILURE);
+	    }
+    }
     free(tids);
 
     return 0;
@@ -305,6 +335,7 @@ int config_file_parser(char *stringa, config_parameters* cfg) {
 }
 
 
+
 void *worker_t(void *args){
 	while(!quit){
 		LOCK(&bufmtx);
@@ -312,32 +343,30 @@ void *worker_t(void *args){
 			WAIT(&bufcond, &bufmtx);
 		}
 		numreq --;
-		list *reqst = remove_node(&requests);
-		
+		int answer = 0;
+		int curfd;
+		MINUS_ONE_EXIT(curfd = remove_node(&requests, &last),"remove_node");
 		UNLOCK(&bufmtx);
 		int codreq = -1;//codice richiesta
 
-		readn(reqst->fd, &codreq, sizeof(int));
-
-		if((int)codreq == CLOSE){
-			close(reqst->fd);
-			return NULL;
-			}
+		readn(curfd, &codreq, sizeof(int));
+		printf("codreq: %d\n", codreq);
 		fileT *tmp;
 		switch((int)codreq){
 			case OPN:
-				opn(OPN,reqst->fd);
+				opn(OPN,curfd);
 				break;
 			case OPNC:
-				opn(OPNC,reqst->fd);
+				opn(OPNC,curfd);
 				break;
 			case OPNL:
-				opn(OPNL,reqst->fd);
+				opn(OPNL,curfd);
 				break;		
 			case OPNCL:
-				opn(OPNCL,reqst->fd); 
+				opn(OPNCL,curfd); 
 				break;		
 			case RD:	
+				rd(curfd);
 				break;	
 			case RDN: 
 				break;	
@@ -350,25 +379,41 @@ void *worker_t(void *args){
 			case CLS:
 				break;
 			case RM:
+				answer = rm(curfd);
 				break;	
 			case CLOSE: 
-				close(reqst->fd);
+				LOCK(&filesopenedmtx);
+				while((tmp = remove_if_equal(curfd, &filesopened)) != NULL){
+					printf("chiudo il file %s\n",tmp->key);
+					tmp->open_create = 0;
+					tmp->open_lock = 0;
+				}
+				UNLOCK(&filesopenedmtx);
+
+				writen(curfd, &answer, sizeof(int));
+				close(curfd);
 				break;
 			case WRT:
-				wrt(reqst->fd);
+				wrt(curfd);
 				break;
 			default://in caso di fallimento di lettura della richiesta o richiesta non valida chiudo la connessione
-				close(reqst->fd);
+				close(curfd);
 				break;
 
 		}
-
-		
+		if((int)codreq != CLOSE){
+			printf("ret: %d\n",curfd);
+			if(write(pfd[1], &curfd, sizeof(int)) == -1){
+				printf("fail\n");
+				close(curfd);
+			}
+			printf("ret: %d\n",curfd);
+		}
 
 	}
 	return NULL;
-
 }
+
 
 
 fileT* opn(int flag, int connfd){
@@ -414,6 +459,11 @@ fileT* opn(int flag, int connfd){
 	    				}
 	    			}
     				UNLOCK(&servermtx);
+    				if(answer != -1){
+	    				LOCK(&filesopenedmtx);
+	    				insert_listfiles(connfd, &tmp, &filesopened);
+	    				UNLOCK(&filesopenedmtx);
+	    			}
         			break;
 
         		case OPNL:
@@ -432,6 +482,13 @@ fileT* opn(int flag, int connfd){
 	    				}
 	    			}
     				UNLOCK(&servermtx);
+
+
+    				if(answer != -1){
+	    				LOCK(&filesopenedmtx);
+	    				insert_listfiles(connfd, &tmp, &filesopened);
+	    				UNLOCK(&filesopenedmtx);
+	    			}
         			break;
 
         		case OPNCL:
@@ -447,11 +504,21 @@ fileT* opn(int flag, int connfd){
 	    			else 
     					answer = -1;
     				UNLOCK(&servermtx);
+
+
+    				if(answer != -1){
+	    				LOCK(&filesopenedmtx);
+	    				insert_listfiles(connfd, &tmp, &filesopened);
+	    				UNLOCK(&filesopenedmtx);
+	    			}
         			break;
         	}
    		}
    		writen(connfd, &answer, sizeof(int));
-   		return tmp;
+   		if (tmp != NULL && answer == -1)
+   			return NULL;
+   		else 
+   			return tmp;
 }
 
 int wrt(int connfd){
@@ -461,9 +528,8 @@ int wrt(int connfd){
 	size_t dim;
 	//printf("answer: %d\n",answer);
 	if((tmp = opn(OPNCL,connfd)) == NULL)
-		answer = -1;
+		return -1;
 	//printf("answer: %d\n",answer);
-
 	if(readn(connfd, &dim, sizeof(size_t)) == -1)
 		answer = -1;
 	//printf("answer: %d\n",answer);
@@ -479,6 +545,9 @@ int wrt(int connfd){
 	if(dim >= configs.SERVER_CAPACITY_BYTES)
 		answer = -1;
 
+	//if(file_slots == 0){
+		//fifo_replace(-1);
+	//}
 	char *path = tmp->key;
 
 	if(answer != -1){
@@ -494,8 +563,69 @@ int wrt(int connfd){
 	    }
 	}
 	//printf("answer: %d\n",answer);
+	LOCK(&serverstatsmtx);
+	file_slots--;
+	free_bytes = free_bytes - (long)dim;
+	UNLOCK(&serverstatsmtx);
+	printf("esco\n");
 	writen(connfd, &answer, sizeof(int));
-	return tmp;
+
+	MINUS_ONE_EXIT(cls(tmp->key),"cls");
+	return answer;
+}
+
+
+int rm(int connfd){
+
+	char* pathname;
+	size_t dim;
+	int answer = 0;
+	fileT *tmp;
+
+	if(readn(connfd, &dim, sizeof(size_t)) == -1)
+		answer = -1;
+
+	if((pathname = malloc(sizeof(char) * dim)) == NULL)
+		answer = -1;
+
+	if(answer != -1){
+		if(readn(connfd, pathname, dim) == -1)
+			answer = -1;
+	}
+
+	LOCK(&servermtx);
+		if((tmp = icl_hash_find(file_server, pathname)) != NULL){
+			if(tmp->open_lock == 1 && tmp->user == connfd){
+				answer = icl_hash_delete(file_server, pathname, NULL, NULL);
+			}
+			else
+				answer = -1;
+		}
+		else 
+			answer = -1;
+	UNLOCK(&servermtx);
+	return answer;
+}
+
+//int fifo_replace
+
+int cls(char* pathname){
+	int answer = 0;
+	fileT *tmp;
+	LOCK(&servermtx);
+	if((tmp = icl_hash_find(file_server, pathname)) != NULL){
+		tmp->open_create = 0;
+		tmp->open_lock = 0;
+	}
+	else 
+		answer = -1;
+	UNLOCK(&servermtx);
+
+	LOCK(&filesopenedmtx);
+	if(remove_if_equalpath(pathname, &filesopened) == NULL)
+		answer = -1;
+	UNLOCK(&filesopenedmtx);
+	return answer;
 }
 
 
