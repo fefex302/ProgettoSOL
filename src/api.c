@@ -52,6 +52,7 @@
     return NULL;			\
   }
 
+static int openwrite = 0;
 static int client_fd;
 static int connection_active = 0;
 static struct sockaddr_un server_address;
@@ -149,8 +150,10 @@ int closeConnection( const char* sockname ){
     }
 
     if(strncmp(server_address.sun_path, sockname, strlen(sockname)+1) ==  0){
-    	if(writen(client_fd,CLOSE,sizeof(int)) == -1)
+    	int req = CLOSE;
+    	if(writen(client_fd, &req, sizeof(int)) == -1)
     		return -1;
+    	readn(client_fd, &req, sizeof(int));
         return close(client_fd);
     }else{
         errno = EFAULT;
@@ -199,8 +202,12 @@ int openFile(const char* pathname, int flags){
 
 	int answer;
 
-	if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
-		return -1;
+	if(openwrite == 0){
+		if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
+			return -1;
+	}
+	else 
+		openwrite = 0;
 
 	int lenght = strlen(pathname)+1;
 	if(writen(client_fd, &lenght, sizeof(int)) == -1)		//mando la lunghezza del pathname
@@ -225,20 +232,28 @@ int openFile(const char* pathname, int flags){
 }
 
 int writeFile(const char* pathname, const char*dirname){
-
-	if(openFile(pathname,O_LOCK_CREATE) == -1){
-		if(print_flag)
-			printf("richiesta di scrittura del file <%s> fallita\n",pathname);
-		errno = ECANCELED;
-		return -1;
-	}
-
+	int request = WRT;
+	openwrite = 1;
+	int retval = 0;
 	int fd_file;
 	char* file_to_send = NULL;
 	size_t size;
 
-	if((file_to_send = read_file(fd_file, pathname, &size)) == NULL)
+	if((file_to_send = read_file(fd_file, pathname, &size)) == NULL){
+		if(print_flag)
+			printf("file <%s> inesistente\n",pathname);
 		return -1;
+	}
+
+	if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
+		return -1;
+
+	if((retval = openFile(pathname,O_LOCK_CREATE)) == -1){
+		if(print_flag)
+			printf("richiesta di apertura in modalità creazione e lock del file <%s> fallita\n",pathname);
+		errno = ECANCELED;
+		return -1;
+	}
 
 	if(writen(client_fd, &size, sizeof(size)) == -1)			//mando la lunghezza del file
 		return -1;
@@ -252,6 +267,8 @@ int writeFile(const char* pathname, const char*dirname){
 		return -1;
 
 	if(answer == -1){
+		if(print_flag)
+			printf("la richiesta di scrittura del file <%s> è fallita\n",pathname);
 		errno = ECANCELED;
 		return -1;
 	}
@@ -268,6 +285,40 @@ int writeFile(const char* pathname, const char*dirname){
 		printf("la richiesta di scrittura del file <%s> ha avuto successo\n",pathname);
 		printf("bytes scritti: %zu\n",size);
 	}
-	return 0;
+	return retval;
 
+}
+
+
+
+int readFile(const char* pathname, void** buf, size_t*size){
+	int request = RD;
+	if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
+		return -1;
+
+	int lenght = strlen(pathname)+1;
+	if(writen(client_fd, &lenght, sizeof(int)) == -1)		//mando la lunghezza del pathname
+		return -1;
+
+	if(writen(client_fd, pathname, lenght) == -1)				//mando il pathname
+		return -1;
+
+	int answer = -1;
+	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server che equivale al size del file
+		return -1;
+
+	if(answer == -1){
+		errno = ECANCELED;
+		return -1;
+	}
+	char* filereturned = malloc(answer);
+		if(!filereturned){
+			errno = ECANCELED;
+			return -1;
+		}
+
+	if(readn(client_fd, filereturned, answer) == -1)		//scrivo il file mandato dal server nel buffer
+		return -1;
+	*size = answer;
+	return 0;
 }
