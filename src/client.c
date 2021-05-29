@@ -278,3 +278,27 @@ int W_req(char *args,char *dirname){				//args lista di file da scrivere separat
     return 0;
 
 }
+
+/*
+int r_req(char *args,char *dirname){				//args lista di file da leggere separati da virgola
+									
+	char *tmpstr;													
+	char *token = strtok_r(args, ",", &tmpstr);
+	int i = 0;
+	char* buf = NULL;
+	size_t filesize = -1;
+
+	while (token) {
+
+		if(readFile(token, buf, &filesize) != 0){		
+			if(print_flag)
+				printf("richiesta di lettura del file <%s> è fallita\n",token);
+		}
+
+    	token = strtok_r(NULL, ",", &tmpstr);
+    	
+    }
+   
+    return 0;
+
+}*/
