@@ -37,25 +37,29 @@
     exit(EXIT_FAILURE);			\
   }
 
-#define LOCK(l)      if (pthread_mutex_lock(l)!=0)        { \
-    fprintf(stderr, "ERRORE FATALE lock\n");		    \
-    pthread_exit((void*)EXIT_FAILURE);			    \
-  }   
+#define LOCK(l)      if (pthread_mutex_lock(l)!=0)     { \
+    if (pthread_mutex_lock(l)!=0){		\
+    	fprintf(stderr, "ERRORE FATALE lock\n");		    \
+    	pthread_exit((void*)EXIT_FAILURE);			    \
+  }}   
 
-#define UNLOCK(l)    if (pthread_mutex_unlock(l)!=0)      { \
-  fprintf(stderr, "ERRORE FATALE unlock\n");		    \
-  pthread_exit((void*)EXIT_FAILURE);				    \
-  }
+#define UNLOCK(l)    if (pthread_mutex_unlock(l)!=0)     { \
+    if (pthread_mutex_lock(l)!=0){		\
+    	fprintf(stderr, "ERRORE FATALE unlock\n");		    \
+    	pthread_exit((void*)EXIT_FAILURE);			    \
+  }}   
 
 #define WAIT(c,l)    if (pthread_cond_wait(c,l)!=0)       { \
-    fprintf(stderr, "ERRORE FATALE wait\n");		    \
-    pthread_exit((void*)EXIT_FAILURE);				    \
-}
+  if (pthread_cond_wait(c,l)!=0)       {	\
+   		fprintf(stderr, "ERRORE FATALE wait\n");		    \
+    	pthread_exit((void*)EXIT_FAILURE);				    \
+}}
 
 #define SIGNAL(c)    if (pthread_cond_signal(c)!=0)       {	\
-    fprintf(stderr, "ERRORE FATALE signal\n");			\
-    pthread_exit((void*)EXIT_FAILURE);					\
-  }
+	if (pthread_cond_signal(c)!=0)       {\
+    	fprintf(stderr, "ERRORE FATALE signal\n");			\
+    	pthread_exit((void*)EXIT_FAILURE);					\
+  }}
 
 //struttura che mi contiene tutti i parametri di configurazione
 typedef struct _configs{
@@ -87,10 +91,10 @@ int updatemax(fd_set set, int fdmax) {
 int config_file_parser(char *stringa, config_parameters* cfg);
 int config_values_correctly_initialized(config_parameters *cfg);
 void *worker_t(void *args);
-int wrt(int connfd);
-fileT* opn(int flag,int connfd);
+int wrt(int connfd, int *error);
+fileT* opn(int flag,int connfd, int *error);
 int cls(char* pathname);
-int rm(int connfd);
+int rm(int connfd, int *error);
 
 //***********************************VARIABILI GLOBALI*************************************************************
 static output_info out_put;				//dati da stampare a schermo all'uscita del programma
@@ -159,8 +163,9 @@ int main(int argc,char *argv[]){
 	free_bytes = configs.SERVER_CAPACITY_MBYTES * 1000000;
 	configs.SERVER_CAPACITY_BYTES = free_bytes;
 	file_server = icl_hash_create(50, NULL, NULL);
-
-	pthread_t *tids = malloc(configs.NUM_THREADS * (sizeof(pthread_t)));
+	pthread_t *tids;
+	if((tids = malloc(configs.NUM_THREADS * (sizeof(pthread_t)))) == NULL)
+		NULL_EXIT(tids = malloc(configs.NUM_THREADS * (sizeof(pthread_t))),"malloc");
 	//inizializzo i tids a 0
 	for(i=0; i<configs.NUM_THREADS; i++){
 		tids[i] = 0;
@@ -210,13 +215,18 @@ int main(int argc,char *argv[]){
 				printf("qua2\n");
 				if (i == listenfd) { // e' una nuova richiesta di connessione 
 					printf("qua3\n");
-					MINUS_ONE_EXIT(connfd = accept(listenfd, (struct sockaddr*)NULL ,NULL), "accept");
+
+					if((connfd = accept(listenfd, (struct sockaddr*)NULL ,NULL)) == -1)
+						MINUS_ONE_EXIT(connfd = accept(listenfd, (struct sockaddr*)NULL ,NULL), "accept");
+
 					FD_SET(connfd, &set);  // aggiungo il descrittore al master set
 					if(active_threads < configs.NUM_THREADS){
 						printf("qua4\n");
 						if (pthread_create(&tids[active_threads], NULL, worker_t, NULL) != 0) {
-					    	fprintf(stderr, "pthread_create failed\n");
-	    					exit(EXIT_FAILURE);
+							if (pthread_create(&tids[active_threads], NULL, worker_t, NULL) != 0){
+						    	fprintf(stderr, "pthread_create failed\n");
+		    					exit(EXIT_FAILURE);
+		    				}
 	    				}
 	    				else
 	    					active_threads++;
@@ -228,7 +238,9 @@ int main(int argc,char *argv[]){
 				else if(i == pfd[0]){// è una scrittura sulla pipe
 					int fdfrompipe;
 					printf("maxfd %d\n",fdmax);
-					MINUS_ONE_EXIT(read(pfd[0], &fdfrompipe, sizeof(int)), "readn");
+					if((read(pfd[0], &fdfrompipe, sizeof(int))) == -1)
+						MINUS_ONE_EXIT(read(pfd[0], &fdfrompipe, sizeof(int)), "readn");
+
 					printf("fd %d\n",fdfrompipe);
 					FD_SET(fdfrompipe, &set);
 					if (fdfrompipe > fdmax) 
@@ -268,7 +280,7 @@ int main(int argc,char *argv[]){
     int status;
 
     for(i = 0; i < active_threads; i++){
-    	if (pthread_join(&tids[i], &status) == -1) {
+    	if (pthread_join(tids[i], &status) == -1) {
 			fprintf(stderr, "pthread_join failed\n");
 	    	exit(EXIT_FAILURE);
 	    }
@@ -344,26 +356,30 @@ void *worker_t(void *args){
 		}
 		numreq --;
 		int answer = 0;
+		int error = 0;		//in caso una delle chiamate come readn,writen,malloc ecc. fallisca error = 1 e chiudo la connessione
 		int curfd;
-		MINUS_ONE_EXIT(curfd = remove_node(&requests, &last),"remove_node");
+		if((curfd = remove_node(&requests, &last)) == -1)
+			MINUS_ONE_EXIT(curfd = remove_node(&requests, &last),"remove_node");
+
 		UNLOCK(&bufmtx);
 		int codreq = -1;//codice richiesta
 
-		readn(curfd, &codreq, sizeof(int));
-		printf("codreq: %d\n", codreq);
+		if(readn(curfd, &codreq, sizeof(int)) == -1) //non esco in caso di errore, ma chiudo la connessione successivamente
+			codreq = -1;
+
 		fileT *tmp;
 		switch((int)codreq){
 			case OPN:
-				opn(OPN,curfd);
+				opn(OPN,curfd,&error);
 				break;
 			case OPNC:
-				opn(OPNC,curfd);
+				opn(OPNC,curfd,&error);
 				break;
 			case OPNL:
-				opn(OPNL,curfd);
+				opn(OPNL,curfd,&error);
 				break;		
 			case OPNCL:
-				opn(OPNCL,curfd); 
+				opn(OPNCL,curfd,&error); 
 				break;		
 			case RD:	
 				rd(curfd);
@@ -379,44 +395,47 @@ void *worker_t(void *args){
 			case CLS:
 				break;
 			case RM:
-				answer = rm(curfd);
+				answer = rm(curfd, &error);
 				break;	
 			case CLOSE: 
 				LOCK(&filesopenedmtx);
 				while((tmp = remove_if_equal(curfd, &filesopened)) != NULL){
-					printf("chiudo il file %s\n",tmp->key);
 					tmp->open_create = 0;
 					tmp->open_lock = 0;
 				}
 				UNLOCK(&filesopenedmtx);
-
-				writen(curfd, &answer, sizeof(int));
+				writen(curfd, &answer, sizeof(int));	//se fallisco non esco tanto non cambia niente per il server
 				close(curfd);
 				break;
 			case WRT:
-				wrt(curfd);
+				wrt(curfd, &error);
 				break;
 			default://in caso di fallimento di lettura della richiesta o richiesta non valida chiudo la connessione
 				close(curfd);
 				break;
 
 		}
-		if((int)codreq != CLOSE){
+		if(error == 1){
+			close(curfd);
+		}
+		else if((int)codreq != CLOSE){
 			printf("ret: %d\n",curfd);
 			if(write(pfd[1], &curfd, sizeof(int)) == -1){
-				printf("fail\n");
-				close(curfd);
+				if(write(pfd[1], &curfd, sizeof(int)) == -1){
+					printf("fail\n");
+					close(curfd);
+				}
 			}
 			printf("ret: %d\n",curfd);
 		}
-
+		error = 0;
 	}
 	return NULL;
 }
 
 
 
-fileT* opn(int flag, int connfd){
+fileT* opn(int flag, int connfd, int *error){
 
 		int dimpath;
 	    char* path = NULL;
@@ -425,16 +444,22 @@ fileT* opn(int flag, int connfd){
 	    int answer = 0;	//if 0 richiesta andata a buon fine, -1 fallita
         
         n = readn(connfd, &dimpath, sizeof(dimpath));		//leggo la dimensione del nome
-        if (n<=0) 
-        	answer = -1;
+        if (n<=0){
+        	*error = 1;
+        	return NULL;
+        }
 
         path = malloc(dimpath);
-        if(!path)
-        	answer = -1;
+        if(!path){
+        	*error = 1;
+        	return NULL;
+        }
         
         n = readn(connfd, path, dimpath);						//leggo il nome
-        if (n<=0) 
-        	answer = -1;
+        if (n<=0){
+        	*error = 1;
+        	return NULL;
+        }
 
         if(answer != -1){
         	switch(flag){
@@ -514,33 +539,44 @@ fileT* opn(int flag, int connfd){
         			break;
         	}
    		}
-   		writen(connfd, &answer, sizeof(int));
+   		if(writen(connfd, &answer, sizeof(int)) == -1){
+   			*error = 1;
+   			return NULL;
+   		}
+
    		if (tmp != NULL && answer == -1)
    			return NULL;
    		else 
    			return tmp;
 }
 
-int wrt(int connfd){
+int wrt(int connfd, int *error){
 	int answer = 0;
 	fileT *tmp;
 	char *contenuto;
 	size_t dim;
-	//printf("answer: %d\n",answer);
-	if((tmp = opn(OPNCL,connfd)) == NULL)
+
+	tmp = opn(OPNCL,connfd, error);
+
+	if(*error == 1){
+		*error = 1;
 		return -1;
-	//printf("answer: %d\n",answer);
-	if(readn(connfd, &dim, sizeof(size_t)) == -1)
-		answer = -1;
-	//printf("answer: %d\n",answer);
+	}
 
-	if((contenuto = malloc(sizeof(char) * dim)) == NULL)
-		answer = -1;
-	//printf("answer: %d\n",answer);
+	if(readn(connfd, &dim, sizeof(size_t)) == -1){
+		*error = 1;
+		return -1;
+	}
 
-	if(readn(connfd, contenuto, dim) == -1)
-		answer = -1;
-	//printf("answer: %d\n",answer);
+	if((contenuto = malloc(sizeof(char) * dim)) == NULL){
+		*error = 1;
+		return -1;
+	}
+
+	if(readn(connfd, contenuto, dim)== -1){
+		*error = 1;
+		return -1;
+	}
 
 	if(dim >= configs.SERVER_CAPACITY_BYTES)
 		answer = -1;
@@ -568,30 +604,41 @@ int wrt(int connfd){
 	free_bytes = free_bytes - (long)dim;
 	UNLOCK(&serverstatsmtx);
 	printf("esco\n");
-	writen(connfd, &answer, sizeof(int));
+	if(writen(connfd, &answer, sizeof(int)) == -1){
+		*error = 1;
+		return -1;
+	}
 
-	MINUS_ONE_EXIT(cls(tmp->key),"cls");
+	if(cls(tmp->key) == -1){
+		*error = 1;
+		return -1;
+	}
 	return answer;
 }
 
 
-int rm(int connfd){
+int rm(int connfd, int *error){
 
 	char* pathname;
 	size_t dim;
 	int answer = 0;
 	fileT *tmp;
-
-	if(readn(connfd, &dim, sizeof(size_t)) == -1)
-		answer = -1;
-
-	if((pathname = malloc(sizeof(char) * dim)) == NULL)
-		answer = -1;
-
-	if(answer != -1){
-		if(readn(connfd, pathname, dim) == -1)
-			answer = -1;
+	
+	if(readn(connfd, &dim, sizeof(size_t)) == -1){
+		*error = 1;
+		return -1;
 	}
+
+	if((pathname = malloc(sizeof(char) * dim)) == NULL){
+		*error = 1;
+		return -1;
+	}
+
+	if(readn(connfd, pathname, dim)==-1){
+		*error = 1;
+		return -1;
+	}
+	
 
 	LOCK(&servermtx);
 		if((tmp = icl_hash_find(file_server, pathname)) != NULL){
@@ -604,6 +651,11 @@ int rm(int connfd){
 		else 
 			answer = -1;
 	UNLOCK(&servermtx);
+
+	if(writen(connfd, &answer, sizeof(int)) == -1){
+		*error = 1;
+		return -1;
+	}
 	return answer;
 }
 
@@ -628,4 +680,49 @@ int cls(char* pathname){
 	return answer;
 }
 
+int rd(int connfd, int *error){
+	char* pathname;
+	int dim;
+	fileT *tmp;
+	int answer = 0;
+	if(readn(connfd, &dim, sizeof(int)) == -1){		//leggo dimensione del pathname
+		*error = 1;
+		return -1;
+	}
 
+	if((pathname = malloc(sizeof(char) * dim)) == NULL){		//alloco spazio pathname
+		*error = 1;
+		return -1;
+	}
+
+	if(readn(connfd, pathname, dim) == -1){			//leggo pathname
+		*error = 1;
+		return -1;
+	}
+
+	LOCK(&servermtx);
+	if((tmp = icl_hash_find(file_server, pathname)) == NULL)
+		answer = -1;
+	UNLOCK(&servermtx);
+
+	int dimfile;
+	if(answer != -1)
+		dimfile = strlen(tmp->data) + 1;
+
+	if(writen(connfd, &answer, sizeof(int)) == -1){	//mando la size del file, in caso il file non esista mando -1
+		*error = 1;
+		return -1;
+	}
+
+	if(answer == -1)
+		return -1;
+
+
+	if(writen(connfd, tmp->data, dimfile) == -1){	//mando la size del file, in caso il file non esista mando -1
+		*error = 1;
+		return -1;
+	}
+
+	return answer;
+
+}
