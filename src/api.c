@@ -60,9 +60,9 @@ int print_flag = 0;
 
 //*************************************FUNZIONI STATICHE DI UTILITÀ***************************************************************
 static char* read_file(int fd_file,const char *file_path, size_t *size){		//legge un file e restituisce nel campo file_return 
-	
-	if((fd_file = open(file_path,O_RDONLY)) == -1)
-		return NULL;															//una stringa contenente tutti i bit del file
+																				//una stringa contenente tutti i bit del file
+	if((fd_file = open(file_path,O_RDONLY)) == -1)								
+		return NULL;															
 	
 	struct stat buf;
 	MINUS_ONE_RETURN_NULL(fstat(fd_file, &buf),"fstat");
@@ -75,7 +75,7 @@ static char* read_file(int fd_file,const char *file_path, size_t *size){		//legg
 	
 	if(readn(fd_file, file_return, buf.st_size+1) == -1)
 		return NULL;
-
+	close(fd_file);
 	return file_return;
 
 }
@@ -153,7 +153,8 @@ int closeConnection( const char* sockname ){
     	int req = CLOSE;
     	if(writen(client_fd, &req, sizeof(int)) == -1)
     		return -1;
-    	readn(client_fd, &req, sizeof(int));
+    	if(readn(client_fd, &req, sizeof(int)) == -1)
+    		return -1;
         return close(client_fd);
     }else{
         errno = EFAULT;
@@ -260,7 +261,7 @@ int writeFile(const char* pathname, const char*dirname){
 
 	if(writen(client_fd, file_to_send, size) == -1)				//mando il file
 		return -1;
-
+	free(file_to_send);
 	int answer;
 
 	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
@@ -293,6 +294,9 @@ int writeFile(const char* pathname, const char*dirname){
 
 int readFile(const char* pathname, void** buf, size_t*size){
 	int request = RD;
+	if(print_flag)
+			printf("richiesta di lettura del file <%s>\n",pathname);
+
 	if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
 		return -1;
 
@@ -303,7 +307,7 @@ int readFile(const char* pathname, void** buf, size_t*size){
 	if(writen(client_fd, pathname, lenght) == -1)				//mando il pathname
 		return -1;
 
-	int answer = -1;
+	size_t answer = -1;
 	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server che equivale al size del file
 		return -1;
 
@@ -311,14 +315,19 @@ int readFile(const char* pathname, void** buf, size_t*size){
 		errno = ECANCELED;
 		return -1;
 	}
-	char* filereturned = malloc(answer);
-		if(!filereturned){
+
+	*buf = malloc(answer);
+		if(!*buf){
 			errno = ECANCELED;
 			return -1;
 		}
-
-	if(readn(client_fd, filereturned, answer) == -1)		//scrivo il file mandato dal server nel buffer
+	memset(*buf,'\0',answer);
+	int read;
+	if((read = readn(client_fd, *buf, answer)) == -1)		//scrivo il file mandato dal server nel buffer
 		return -1;
+
 	*size = answer;
+	if(print_flag)
+			printf("richiesta di lettura del file <%s> ha avuto successo\n",pathname);
 	return 0;
 }
