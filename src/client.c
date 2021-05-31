@@ -10,8 +10,10 @@
 #include <sys/uio.h>
 #include <sys/un.h>
 #include <fcntl.h>
-
+#include <limits.h>
 #include <assert.h>
+#include <libgen.h>
+
 #include "api.h"
 #include "utils.h"
 
@@ -44,7 +46,7 @@ int help();
 int f_req(char* args);
 int disconnect(char *args);
 int W_req(char *args,char *dirname);
-
+int r_req(char *args,char *dirname);
 
 //*******************************************MAIN*****************************************************************************
 int main(int argc,char* argv[]){
@@ -58,8 +60,8 @@ int main(int argc,char* argv[]){
 	int end = 0;	//usato per terminare il client
 
 	char *sockname = NULL;
-	char *dirname = NULL;	//cartella dove memorizzare i file letti dal server	
-
+	char *read_dirname = NULL;	//cartella dove memorizzare i file letti dal server	
+	char *dirname = NULL;
 	int d=0,r=0,R=0,h=0,f=0,p=0;
 
 	for(int i = 1; i<argc; i++){
@@ -102,11 +104,11 @@ int main(int argc,char* argv[]){
 	if(d>0){
 		if(r>0){
 			r++;
-			dirname = argv[r];
+			read_dirname = argv[r];
 		}
 		else if(R>0){
 			R++;
-			dirname = argv[R];
+			read_dirname = argv[R];
 		}
 		else{
 			printf("-d needs at least one -r or -R\n");
@@ -133,6 +135,7 @@ int main(int argc,char* argv[]){
 				W_req(optarg,dirname);
 				break;
 			case 'r':  
+				r_req(optarg,read_dirname);
 				break;
 			case 'R': 
 				printf("R con argomenti\n");
@@ -232,13 +235,21 @@ int f_req(char* args){
 	abstime.tv_sec += 10;
 	
 	char *s = malloc(strlen(args)+1);
+	if(!s)
+		s = malloc(strlen(args)+1);
+	if(!s)
+		exit(EXIT_FAILURE);
+	memset(s,'\0',strlen(args)+1);
+
 	strncpy(s,args,strlen(args)+1);
 	if(openConnection(s,MSEC,abstime) == -1){
 		free(s);
 		return -1;
 	}
-
-	else return 0;
+	else{
+		free(s);
+		return 0;
+	}
 }
 
 
@@ -262,15 +273,21 @@ int W_req(char *args,char *dirname){				//args lista di file da scrivere separat
 									
 	char *tmpstr;													
 	char *token = strtok_r(args, ",", &tmpstr);
+	char *resolvedpath;
 	int i = 0;
 	
 	while (token) {
+		resolvedpath = realpath(token, NULL);
+		if(!resolvedpath)
+			resolvedpath = realpath(token, NULL);
+		if(!resolvedpath)
+			exit(EXIT_FAILURE);
 
-		if(writeFile(token,dirname) != 0){		
+		if(writeFile(resolvedpath,dirname) != 0){		
 			if(print_flag)
 				printf("richiesta di scrittura del file <%s> è fallita\n",token);
 		}
-
+		free(resolvedpath);
     	token = strtok_r(NULL, ",", &tmpstr);
     	
     }
@@ -279,26 +296,51 @@ int W_req(char *args,char *dirname){				//args lista di file da scrivere separat
 
 }
 
-/*
+
 int r_req(char *args,char *dirname){				//args lista di file da leggere separati da virgola
 									
 	char *tmpstr;													
 	char *token = strtok_r(args, ",", &tmpstr);
 	int i = 0;
-	char* buf = NULL;
+	char *buf = NULL;
 	size_t filesize = -1;
-
+	int len = strlen(dirname) + 1;
 	while (token) {
 
-		if(readFile(token, buf, &filesize) != 0){		
+		if(readFile(token, &buf, &filesize) != 0){		
 			if(print_flag)
 				printf("richiesta di lettura del file <%s> è fallita\n",token);
 		}
 
+  
+    	if(dirname != NULL  && buf!= NULL && filesize != -1){
+			int fd_file;
+			/*char* dirfile = malloc(len);
+			if(!dirfile)
+				continue;
+			memset(dirfile,'\0',len);
+			strncpy(dirfile, dirname, len);
+			char* namefile = basename(token);
+			if(!namefile)
+				continue;
+			strncat(dirfile, namefile, strlen(token)+1);*/
+			if((fd_file = open("./IDEE/namefile", O_CREAT|O_WRONLY, 0666)) == -1){
+				perror("open");
+				continue;
+			}
+
+			if(writen(fd_file, buf, filesize) == -1){
+				perror("writen");
+				continue;
+			}
+			close(fd_file);
+
+    	}		
     	token = strtok_r(NULL, ",", &tmpstr);
-    	
+						
+    	free(buf);
     }
    
     return 0;
 
-}*/
+}
