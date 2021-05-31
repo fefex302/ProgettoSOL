@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -95,14 +96,15 @@ int wrt(int connfd, int *error);
 fileT* opn(int flag,int connfd, int *error);
 int cls(char* pathname);
 int rm(int connfd, int *error);
-
+int rd(int connfd, int *error);
 //***********************************VARIABILI GLOBALI*************************************************************
 static output_info out_put;				//dati da stampare a schermo all'uscita del programma
 static config_parameters configs;		//parametri di configurazione passati dal file config.txt
 static list *requests = NULL;			//lista fifo delle richieste dei client
 static list *last = NULL;				//puntatore all'ultimo elemento della queue
 static int numreq = 0;					//variabile che indica se il buffer delle richieste è vuoto o meno
-static int quit = 0;					//variabile che dice se bisogna uscire dal programma
+volatile sig_atomic_t quit = 0;			//variabile che dice se bisogna uscire dal programma velocemente
+volatile sig_atomic_t stop = 0;			//variabile che dice se bisogna uscire	dal programma finendo prima le richieste ricevute 
 static pthread_mutex_t	bufmtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t	servermtx = PTHREAD_MUTEX_INITIALIZER;
 static hashtable *file_server;			//hashtable dove andrò a memorizzare tutti i file
@@ -114,6 +116,23 @@ static pthread_mutex_t	filesopenedmtx = PTHREAD_MUTEX_INITIALIZER;
 static long file_slots;
 static long free_bytes;
 static listfiles *filesopened = NULL;
+
+void sigterm(int signo) {
+    switch(signo){
+    	case SIGPIPE:
+    		break;
+    	case SIGINT:
+    		quit = 1;
+    		break;
+    	case SIGQUIT:
+    		quit = 1;
+    		break;
+    	case SIGHUP:
+    		stop = 1;
+    		break;
+ 
+    }
+}
 //***********************************MAIN****************************************************************************
 
 int main(int argc,char *argv[]){
@@ -122,6 +141,15 @@ int main(int argc,char *argv[]){
 		printf("you must use a config file\n");
 		return EXIT_FAILURE;
 	}
+	//********SIGHANDLER******
+	struct sigaction s;
+    s.sa_handler = sigterm;
+    sigemptyset(&s.sa_mask);
+    s.sa_flags = SA_RESTART;
+    sigaction(SIGINT, &s, NULL);
+    sigaction(SIGQUIT, &s, NULL);
+    sigaction(SIGHUP, &s, NULL);
+    sigaction(SIGPIPE, &s, NULL);
 
 	FILE *config_file;
 
@@ -199,11 +227,15 @@ int main(int argc,char *argv[]){
     int fdmax = listenfd; 
   	printf("listenfd %d\n",listenfd);
 
-    while(!quit){
+    while(!quit && !stop){
     	tmpset = set;
     	if (select(fdmax+1, &tmpset, NULL, NULL, NULL) == -1) { // attenzione al +1
-	    	perror("select");
-	   		return -1;
+    		if(errno == EINTR)
+    			continue;
+    		else{
+		    	perror("select");
+		   		return -1;
+		   	}
 		}
 		printf("qua1\n");
 	// cerchiamo di capire da quale fd abbiamo ricevuto una richiesta
@@ -228,8 +260,7 @@ int main(int argc,char *argv[]){
 		    					exit(EXIT_FAILURE);
 		    				}
 	    				}
-	    				else
-	    					active_threads++;
+	    				active_threads++;
 					}
 					if(connfd > fdmax) fdmax = connfd;  // ricalcolo il massimo
 				}
@@ -277,19 +308,27 @@ int main(int argc,char *argv[]){
 		}
 
     }
-    int status;
-
+    if(stop == 1){
+    	for(i = 0; i < active_threads; i ++){
+    		if(insert_node(-1, &last, &requests) == -1)
+    			insert_node(-1, &last, &requests);
+		}
+	}
+    
+	SIGNAL(&bufcond);
     for(i = 0; i < active_threads; i++){
-    	if (pthread_join(tids[i], &status) == -1) {
+    	if (pthread_join(tids[i], NULL) == -1) {
 			fprintf(stderr, "pthread_join failed\n");
 	    	exit(EXIT_FAILURE);
 	    }
     }
     free(tids);
-
+    icl_hash_destroy(file_server, NULL, NULL);
+    printf("fine\n");
     return 0;
 
 }
+
 
 
 int config_values_correctly_initialized(config_parameters *cfg){
@@ -350,20 +389,25 @@ int config_file_parser(char *stringa, config_parameters* cfg) {
 
 void *worker_t(void *args){
 	while(!quit){
-		LOCK(&bufmtx);
-		while(numreq == 0){
-			WAIT(&bufcond, &bufmtx);
-		}
-		numreq --;
 		int answer = 0;
 		int error = 0;		//in caso una delle chiamate come readn,writen,malloc ecc. fallisca error = 1 e chiudo la connessione
 		int curfd;
+
+		LOCK(&bufmtx);
+		while(numreq == 0){
+			WAIT(&bufcond, &bufmtx);
+			if(quit)
+				return NULL;
+		}
+		numreq --;
 		if((curfd = remove_node(&requests, &last)) == -1)
 			MINUS_ONE_EXIT(curfd = remove_node(&requests, &last),"remove_node");
-
 		UNLOCK(&bufmtx);
+		if(curfd == -1){
+			return NULL;
+		}
 		int codreq = -1;//codice richiesta
-
+		printf("READN\n");
 		if(readn(curfd, &codreq, sizeof(int)) == -1) //non esco in caso di errore, ma chiudo la connessione successivamente
 			codreq = -1;
 
@@ -382,7 +426,7 @@ void *worker_t(void *args){
 				opn(OPNCL,curfd,&error); 
 				break;		
 			case RD:	
-				rd(curfd);
+				rd(curfd, &error);
 				break;	
 			case RDN: 
 				break;	
@@ -404,7 +448,9 @@ void *worker_t(void *args){
 					tmp->open_lock = 0;
 				}
 				UNLOCK(&filesopenedmtx);
+				printf("READN\n");
 				writen(curfd, &answer, sizeof(int));	//se fallisco non esco tanto non cambia niente per il server
+				printf("READN\n");
 				close(curfd);
 				break;
 			case WRT:
@@ -588,7 +634,6 @@ int wrt(int connfd, int *error){
 
 	if(answer != -1){
 		printf("path: %s\n",path);
-		printf("path: %d\n",strlen(path));
 	   	if(tmp->open_lock == 1 && tmp->open_create == 1){
 	    	//if(dim > free_bytes)
 	    		//answer = fifo_replace(dim);
@@ -704,21 +749,21 @@ int rd(int connfd, int *error){
 	if((tmp = icl_hash_find(file_server, pathname)) == NULL)
 		answer = -1;
 	UNLOCK(&servermtx);
-
-	int dimfile;
+	free(pathname);
+	
+	size_t dimfile;
 	if(answer != -1)
-		dimfile = strlen(tmp->data) + 1;
+		dimfile = tmp->size;
 
-	if(writen(connfd, &answer, sizeof(int)) == -1){	//mando la size del file, in caso il file non esista mando -1
+	if(writen(connfd, &dimfile, sizeof(size_t)) == -1){	//mando la size del file, in caso il file non esista mando -1
 		*error = 1;
 		return -1;
 	}
 
 	if(answer == -1)
 		return -1;
-
-
-	if(writen(connfd, tmp->data, dimfile) == -1){	//mando la size del file, in caso il file non esista mando -1
+	
+	if(writen(connfd, tmp->data, tmp->size) == -1){	//mando il file
 		*error = 1;
 		return -1;
 	}
