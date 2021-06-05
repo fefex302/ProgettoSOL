@@ -9,9 +9,11 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/uio.h>
 #include <sys/un.h>
 #include <fcntl.h>
+#include <time.h>
 
 #include "utils.h"
 #include "hash.h"
@@ -226,17 +228,34 @@ int main(int argc,char *argv[]){
     // tengo traccia del file descriptor con id piu' grande
     int fdmax = listenfd; 
   	printf("listenfd %d\n",listenfd);
+  	//potrei avere un caso raro dove il segnale arriva dopo il controllo dei valori stop o quit e prima della select
+  	//quindi mi imposto un timeout di 5 secondi e controllo se fosse arrivato un segnale
+  	struct timeval select_timeout;	
+ 
 
-    while(!quit && !stop){
+    while(!quit){
+    	select_timeout.tv_usec = 0;
+  		select_timeout.tv_sec = 5;
     	tmpset = set;
-    	if (select(fdmax+1, &tmpset, NULL, NULL, NULL) == -1) { // attenzione al +1
-    		if(errno == EINTR)
-    			continue;
-    		else{
-		    	perror("select");
-		   		return -1;
-		   	}
+    	if(!quit){
+    		if(!stop){
+		    	if (select(fdmax+1, &tmpset, NULL, NULL, NULL) == -1) { 
+		    		if(errno == EINTR)
+		    			continue;
+		    		else{
+				    	perror("select");
+				   		return -1;
+				   	}
+				}
+			}
 		}
+		if(quit)
+			break;
+		if(stop){
+			for(i = 0; i<active_threads; i++)
+				MINUS_ONE_EXIT(insert_node(-1,&last,&requests), "insert node stop");
+		}
+
 		printf("qua1\n");
 	// cerchiamo di capire da quale fd abbiamo ricevuto una richiesta
 		for(int i=0; i <= fdmax; i++) {
@@ -316,11 +335,13 @@ int main(int argc,char *argv[]){
 	}
     
 	SIGNAL(&bufcond);
+
     for(i = 0; i < active_threads; i++){
     	if (pthread_join(tids[i], NULL) == -1) {
 			fprintf(stderr, "pthread_join failed\n");
 	    	exit(EXIT_FAILURE);
 	    }
+	    printf("thread joinato\n");
     }
     free(tids);
     icl_hash_destroy(file_server, NULL, NULL);
@@ -392,12 +413,19 @@ void *worker_t(void *args){
 		int answer = 0;
 		int error = 0;		//in caso una delle chiamate come readn,writen,malloc ecc. fallisca error = 1 e chiudo la connessione
 		int curfd;
-
+		printf("start\n");
 		LOCK(&bufmtx);
+		if(quit){
+				UNLOCK(&bufmtx);
+				return NULL;
+			}
 		while(numreq == 0){
 			WAIT(&bufcond, &bufmtx);
-			if(quit)
+			if(quit){
+				UNLOCK(&bufmtx);
+				SIGNAL(&bufcond);
 				return NULL;
+			}
 		}
 		numreq --;
 		if((curfd = remove_node(&requests, &last)) == -1)
@@ -416,31 +444,42 @@ void *worker_t(void *args){
 			case OPN:
 				opn(OPN,curfd,&error);
 				break;
+
 			case OPNC:
 				opn(OPNC,curfd,&error);
 				break;
+
 			case OPNL:
 				opn(OPNL,curfd,&error);
-				break;		
+				break;	
+
 			case OPNCL:
 				opn(OPNCL,curfd,&error); 
-				break;		
+				break;	
+
 			case RD:	
 				rd(curfd, &error);
 				break;	
+
 			case RDN: 
 				break;	
+
 			case APP:
 				break;	
+
 			case LO:
-				break; 		
+				break; 	
+
 			case UN:	
-				break;	
+				break;
+
 			case CLS:
 				break;
+
 			case RM:
 				answer = rm(curfd, &error);
 				break;	
+
 			case CLOSE: 
 				LOCK(&filesopenedmtx);
 				while((tmp = remove_if_equal(curfd, &filesopened)) != NULL){
@@ -453,9 +492,14 @@ void *worker_t(void *args){
 				printf("READN\n");
 				close(curfd);
 				break;
+
 			case WRT:
 				wrt(curfd, &error);
 				break;
+
+			case -1:
+				return NULL;//richiesta di chiusura del thread
+
 			default://in caso di fallimento di lettura della richiesta o richiesta non valida chiudo la connessione
 				close(curfd);
 				break;
@@ -750,10 +794,12 @@ int rd(int connfd, int *error){
 		answer = -1;
 	UNLOCK(&servermtx);
 	free(pathname);
-	
+	printf("anseer %d\n",answer);
 	size_t dimfile;
 	if(answer != -1)
 		dimfile = tmp->size;
+	else
+		dimfile = -1;
 
 	if(writen(connfd, &dimfile, sizeof(size_t)) == -1){	//mando la size del file, in caso il file non esista mando -1
 		*error = 1;
