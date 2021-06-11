@@ -96,7 +96,7 @@ int config_values_correctly_initialized(config_parameters *cfg);
 void *worker_t(void *args);
 int wrt(int connfd, int *error);
 fileT* opn(int flag,int connfd, int *error);
-int cls(char* pathname);
+int cls(int connfd,char* pathname);
 int rm(int connfd, int *error);
 int rd(int connfd, int *error);
 //***********************************VARIABILI GLOBALI*************************************************************
@@ -482,11 +482,16 @@ void *worker_t(void *args){
 
 			case CLOSE: 
 				LOCK(&filesopenedmtx);
+				LOCK(&servermtx);
 				while((tmp = remove_if_equal(curfd, &filesopened)) != NULL){
+					LOCK(&tmp->filemtx);
 					tmp->open_create = 0;
 					tmp->open_lock = 0;
+					UNLOCK(&tmp->filemtx);
 				}
+				UNLOCK(&servermtx);
 				UNLOCK(&filesopenedmtx);
+
 				printf("READN\n");
 				writen(curfd, &answer, sizeof(int));	//se fallisco non esco tanto non cambia niente per il server
 				printf("READN\n");
@@ -560,10 +565,14 @@ fileT* opn(int flag, int connfd, int *error){
 
         		case OPNC:
         			LOCK(&servermtx);
-        			if((tmp = icl_hash_find(file_server, path)) == NULL)
+        			if((tmp = icl_hash_find(file_server, path)) == NULL){
+        				UNLOCK(&servermtx);
         				answer = -1;
+        			}
 	        			    			
 	    			else{
+	    				LOCK(&tmp->filemtx);
+	    				UNLOCK(&servermtx);
 	    				if(tmp->open_lock)
 	    					answer = -1;
 	    				if(tmp->open_create)
@@ -572,8 +581,9 @@ fileT* opn(int flag, int connfd, int *error){
     						tmp->open_create = 1;
 	    					tmp->user = connfd;
 	    				}
+	    				UNLOCK(&tmp->filemtx);
 	    			}
-    				UNLOCK(&servermtx);
+  
     				if(answer != -1){
 	    				LOCK(&filesopenedmtx);
 	    				insert_listfiles(connfd, &tmp, &filesopened);
@@ -583,10 +593,14 @@ fileT* opn(int flag, int connfd, int *error){
 
         		case OPNL:
            			LOCK(&servermtx);
-        			if((tmp = icl_hash_find(file_server, path)) == NULL)
+        			if((tmp = icl_hash_find(file_server, path)) == NULL){
+        				UNLOCK(&servermtx);
         				answer = -1;
+        			}
 	        			    			
 	    			else{
+	    				LOCK(&tmp->filemtx);
+	    				UNLOCK(&servermtx);
 	    				if(tmp->open_lock)
 	    					answer = -1;
 	    				if(tmp->open_create)
@@ -595,6 +609,7 @@ fileT* opn(int flag, int connfd, int *error){
     						tmp->open_lock = 1;
 	    					tmp->user = connfd;
 	    				}
+	    				UNLOCK(&tmp->filemtx);
 	    			}
     				UNLOCK(&servermtx);
 
@@ -608,17 +623,26 @@ fileT* opn(int flag, int connfd, int *error){
 
         		case OPNCL:
         			LOCK(&servermtx);
-        			if((tmp = icl_hash_find(file_server, path)) == NULL && file_slots != 0){
-	        			if((tmp = icl_hash_insert(file_server, path, NULL)) == NULL)
-	    					answer = -1;
+        			if((tmp = icl_hash_find(file_server, path)) == NULL){
+	        			if((tmp = icl_hash_insert(file_server, path, NULL)) == NULL){
+	        				UNLOCK(&servermtx);
+	        				answer = -1;
+	        				break;
+	        			}
 	    				tmp->open_lock = 1;
 	    				tmp->open_create = 1;
+	    				pthread_mutex_init(&tmp->filemtx,NULL);
 	    				int con = connfd;
 	    				tmp->user = con;
+	    				UNLOCK(&servermtx);
 	    			}
-	    			else 
-    					answer = -1;
-    				UNLOCK(&servermtx);
+	    			else {
+	    				LOCK(&tmp->filemtx);
+	    				UNLOCK(&servermtx);
+    					tmp->open_lock = 1;
+	    				tmp->open_create = 1;
+	    				UNLOCK(&tmp->filemtx);
+	    			}
 
 
     				if(answer != -1){
@@ -647,29 +671,34 @@ int wrt(int connfd, int *error){
 	size_t dim;
 
 	tmp = opn(OPNCL,connfd, error);
-
 	if(*error == 1){
 		*error = 1;
 		return -1;
 	}
 
+	LOCK(&tmp->filemtx);
 	if(readn(connfd, &dim, sizeof(size_t)) == -1){
 		*error = 1;
+		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
 
 	if((contenuto = malloc(sizeof(char) * dim)) == NULL){
 		*error = 1;
+		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
 
 	if(readn(connfd, contenuto, dim)== -1){
 		*error = 1;
+		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
 
-	if(dim >= configs.SERVER_CAPACITY_BYTES)
+	if(dim >= configs.SERVER_CAPACITY_BYTES){
+		
 		answer = -1;
+	}
 
 	//if(file_slots == 0){
 		//fifo_replace(-1);
@@ -697,8 +726,8 @@ int wrt(int connfd, int *error){
 		*error = 1;
 		return -1;
 	}
-
-	if(cls(tmp->key) == -1){
+	UNLOCK(&tmp->filemtx);
+	if(cls(connfd,tmp->key) == -1){
 		*error = 1;
 		return -1;
 	}
@@ -732,7 +761,9 @@ int rm(int connfd, int *error){
 	LOCK(&servermtx);
 		if((tmp = icl_hash_find(file_server, pathname)) != NULL){
 			if(tmp->open_lock == 1 && tmp->user == connfd){
+				LOCK(&tmp->filemtx);
 				answer = icl_hash_delete(file_server, pathname, NULL, NULL);
+				UNLOCK(&tmp->filemtx);
 			}
 			else
 				answer = -1;
@@ -750,17 +781,23 @@ int rm(int connfd, int *error){
 
 //int fifo_replace
 
-int cls(char* pathname){
+int cls(int connfd,char* pathname){
 	int answer = 0;
 	fileT *tmp;
 	LOCK(&servermtx);
 	if((tmp = icl_hash_find(file_server, pathname)) != NULL){
-		tmp->open_create = 0;
-		tmp->open_lock = 0;
+		if(connfd == tmp->user){
+			LOCK(&tmp->filemtx);
+			UNLOCK(&servermtx);
+			tmp->open_create = 0;
+			tmp->open_lock = 0;
+			UNLOCK(&tmp->filemtx);
+		}
 	}
-	else 
+	else {
+		UNLOCK(&tmp->filemtx);
 		answer = -1;
-	UNLOCK(&servermtx);
+	}
 
 	LOCK(&filesopenedmtx);
 	if(remove_if_equalpath(pathname, &filesopened) == NULL)
@@ -790,11 +827,17 @@ int rd(int connfd, int *error){
 	}
 
 	LOCK(&servermtx);
-	if((tmp = icl_hash_find(file_server, pathname)) == NULL)
+	if((tmp = icl_hash_find(file_server, pathname)) == NULL){
 		answer = -1;
-	UNLOCK(&servermtx);
+		UNLOCK(&servermtx);
+	}
+	else{
+		LOCK(&tmp->filemtx);
+		UNLOCK(&servermtx);
+	}
+
 	free(pathname);
-	printf("anseer %d\n",answer);
+	
 	size_t dimfile;
 	if(answer != -1)
 		dimfile = tmp->size;
@@ -803,17 +846,21 @@ int rd(int connfd, int *error){
 
 	if(writen(connfd, &dimfile, sizeof(size_t)) == -1){	//mando la size del file, in caso il file non esista mando -1
 		*error = 1;
+		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
 
-	if(answer == -1)
+	if(answer == -1){
+		UNLOCK(&tmp->filemtx);
 		return -1;
+	}
 	
 	if(writen(connfd, tmp->data, tmp->size) == -1){	//mando il file
 		*error = 1;
+		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
-
+	UNLOCK(&tmp->filemtx);
 	return answer;
 
 }
