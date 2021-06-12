@@ -24,7 +24,6 @@
 #define MSEC 10
 #define MAX_FILE_NAME 2048
 
-static int flag_f = 0;	//variabile che identifica se la connessione col socket è stata effettuata o meno
 extern int print_flag;	//variabile che identifica se la stampa delle operazioni è abilitata
 
 #define NULL_EXIT(X,str)	\
@@ -82,8 +81,10 @@ int main(int argc,char* argv[]){
 	int d=0,r=0,R=0,h=0,f=0,p=0;
 
 	for(int i = 1; i<argc; i++){
-		if(strncmp(argv[i],"-d",3) == 0)
+		if(strncmp(argv[i],"-d",3) == 0){
 			d = i;
+			printf("indice %d\n",d);
+		}
 		else if(strcmp(argv[i],"-r") == 0)
 			r = i;
 		else if(strcmp(argv[i],"-R") == 0)
@@ -120,19 +121,19 @@ int main(int argc,char* argv[]){
 
 	if(d>0){
 		if(r>0){
-			r++;
-			read_dirname = argv[r];
+			d++;
+			read_dirname = argv[d];
 		}
 		else if(R>0){
-			R++;
-			read_dirname = argv[R];
+			d++;
+			read_dirname = argv[d];
 		}
 		else{
 			printf("-d ha bisogno di almeno uno tra -r o -R\n");
 			end = 1;
 		}
 	}
-
+	printf("read dirname %s\n",read_dirname);
 	//abilito le stampe delle operazioni
 	if(p>0){
 		print_flag = 1;
@@ -403,12 +404,14 @@ int W_req(char *args,char *dirname){				//args lista di file da scrivere separat
 
 
 int r_req(char *args,char *dirname){				//args lista di file da leggere separati da virgola
-									
+	if(!args)
+		return -1;				
 	char *tmpstr;													
 	char *token = strtok_r(args, ",", &tmpstr);
-	char *buf = NULL;
+	void *buf = NULL;
 	size_t filesize = -1;
 	int len = strlen(dirname) + 1;
+	int n = 0;
 	while (token) {
 
 		if(readFile(token, &buf, &filesize) != 0){		
@@ -418,27 +421,45 @@ int r_req(char *args,char *dirname){				//args lista di file da leggere separati
 
   
     	if(dirname != NULL  && buf!= NULL && filesize != -1){
+    		//******************DO ERROR MANAGEMENT *****************************
 			int fd_file;
-			/*char* dirfile = malloc(len);
-			if(!dirfile)
+		    char str[10];
+		    printf("cartella %s\n",dirname);
+			
+			char namefile[40] = {'f','i','l','e'};
+			if(sprintf(str, "%d", n) <0){
+				token = strtok_r(NULL, ",", &tmpstr);
 				continue;
+			}
+
+			strncat(namefile,str,strlen(str));
+
+			char* dirfile = malloc(len+strlen(namefile));
+			if(!dirfile){
+				token = strtok_r(NULL, ",", &tmpstr);
+				continue;
+			}
 			memset(dirfile,'\0',len);
-			strncpy(dirfile, dirname, len);
-			char* namefile = basename(token);
-			if(!namefile)
-				continue;
-			strncat(dirfile, namefile, strlen(token)+1);*/
-			if((fd_file = open("./IDEE/namefile", O_CREAT|O_WRONLY, 0666)) == -1){
+
+			strncpy(dirfile,dirname,len);
+
+			strncat(dirfile, namefile, strlen(namefile));
+			n++;
+			printf("cartella %s\n",dirfile);
+			//******************************************************************
+			if((fd_file = open(dirfile, O_CREAT|O_WRONLY, 0666)) == -1){
 				perror("open");
+				token = strtok_r(NULL, ",", &tmpstr);
 				continue;
 			}
 
 			if(writen(fd_file, buf, filesize) == -1){
 				perror("writen");
+				token = strtok_r(NULL, ",", &tmpstr);
 				continue;
 			}
 			close(fd_file);
-
+			free(dirfile);
     	}		
     	token = strtok_r(NULL, ",", &tmpstr);
 						
