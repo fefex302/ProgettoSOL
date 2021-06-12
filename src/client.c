@@ -5,14 +5,16 @@
 #include <getopt.h>
 #include <time.h>
 #include <errno.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/uio.h>
-#include <sys/un.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <assert.h>
 #include <libgen.h>
+#include <dirent.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <sys/un.h>
+#include <sys/stat.h>
 
 #include "api.h"
 #include "utils.h"
@@ -20,6 +22,7 @@
 #define BUF_LEN 100
 #define BUF_LEN_2 25
 #define MSEC 10
+#define MAX_FILE_NAME 2048
 
 static int flag_f = 0;	//variabile che identifica se la connessione col socket è stata effettuata o meno
 extern int print_flag;	//variabile che identifica se la stampa delle operazioni è abilitata
@@ -47,6 +50,20 @@ int f_req(char* args);
 int disconnect(char *args);
 int W_req(char *args,char *dirname);
 int r_req(char *args,char *dirname);
+int w_parse(char *args, char *wdirname, long *nFileToSend);
+int w_req( const char* nomedir, long* n );
+
+typedef struct _arg_list{
+    char* arg;
+    struct _arg_list* next;
+} arg_list;
+
+int isdot(const char dir[]) {
+  int l = strlen(dir);
+
+  if ( (l>0 && dir[l-1] == '.') ) return 1;
+  return 0;
+}
 
 //*******************************************MAIN*****************************************************************************
 int main(int argc,char* argv[]){
@@ -111,7 +128,7 @@ int main(int argc,char* argv[]){
 			read_dirname = argv[R];
 		}
 		else{
-			printf("-d needs at least one -r or -R\n");
+			printf("-d ha bisogno di almeno uno tra -r o -R\n");
 			end = 1;
 		}
 	}
@@ -122,6 +139,9 @@ int main(int argc,char* argv[]){
 	}
 		
 	opterr = 0;
+	long nFileToSend = -1;
+	char wdirname[MAX_FILE_NAME];
+	memset(wdirname,'\0',MAX_FILE_NAME);
 
 	while ((opt = getopt(argc,argv, ":hf:w:W:r:R:d:t:l:u:c:p")) != -1 && !end) {
 		switch(opt) {
@@ -129,7 +149,13 @@ int main(int argc,char* argv[]){
 				break;
 			case 'f':
 				break;
-			case 'w':   
+			case 'w':
+				if(w_parse(optarg,wdirname,&nFileToSend) == 0){
+					w_req(wdirname,&nFileToSend);
+				}
+				else {
+					printf("-w: errore nel parsing degli argomenti\n");
+				}
 				break;
 			case 'W': 
 				W_req(optarg,dirname);
@@ -168,8 +194,9 @@ int main(int argc,char* argv[]){
 				    } break;
 				default:;
     	}
+    	sleep(1);
   	}
-  	sleep(2);
+  	sleep(1);
 	if(sockname != NULL)
 		disconnect(sockname);
   	return 0;
@@ -209,13 +236,90 @@ int parse_arguments(char *buf,char *buf2[]){
     return n;
 }
 
+int w_parse(char *args, char *wdirname, long *nFileToSend){
+	int i = 0;
+	while(args[i] != '\0' && args[i] != ',')
+		i++;
+	if(args[i] != '\0'){
+		strncpy(wdirname, args, i);
+		printf("DIRNAME %s\n",wdirname);
+		char aux[11];
+		memset(aux,'\0',11);
+		strncpy(aux, args+i, 11);
+		printf("AUX %s\n",aux);
+		if(aux[0] != 'n' && aux[1]!= '=')
+			return -1;
+		else {
+			if(isNumber(aux+2, nFileToSend) != 0)
+				return -1;
+		}
+	}
+	else{
+		strncpy(wdirname, args, i+1);
+		printf("DIRNAME %s\n",wdirname);
+	}
+
+	return 0;
+	
+}
+
+int w_req( const char* nomedir, long* n ){
+
+    // controllo se il parametro sia una directory
+    struct stat statbuf;
+    memset(&statbuf, '0', sizeof(statbuf));
+    MINUS_ONE_EXIT(stat(nomedir, &statbuf), "stat");
+
+    DIR *dir;
+    if((dir = opendir(nomedir)) == NULL){
+        perror("opendir");
+        return -1;
+    }else{
+        struct dirent* file;
+
+        while(*n != 0 && (errno = 0, file = readdir(dir)) != NULL){
+            struct stat statbuf;
+            char filename[MAX_FILE_NAME];
+            int len1 = strlen(nomedir);
+            int len2 = strlen(file->d_name);
+            if((len1 + len2 + 2) > MAX_FILE_NAME){
+                fprintf(stderr, "ERROR: MAX_FILE_NAME too small : %d\n", MAX_FILE_NAME);
+                return -1;
+            }
+            strncpy(filename, nomedir, MAX_FILE_NAME-1);
+            strncat(filename, "/", MAX_FILE_NAME-1);
+            strncat(filename, file->d_name, MAX_FILE_NAME-1);
+fprintf(stdout, "Nome del file che sto esaminando: '%s'\n", filename);
+            if(stat(filename, &statbuf)==-1) {
+              perror("eseguendo la stat");
+              fprintf(stderr, "ERROR: Error in file %s\n", filename);
+              return -1;
+            }
+
+            if(S_ISDIR(statbuf.st_mode)){
+                      if ( !isdot(filename) ){
+fprintf(stdout, "L'elemento che sto per visitare è una directory di nome '%s'\n", filename);
+                          int res = w_req(filename,n);
+                          if(res == -1) return -1;
+                      }
+            }else{
+            	printf("scrivo il file\n");
+                *n = *n - 1;
+               W_req(filename,NULL);
+           }
+        }
+        if (errno != 0) perror("readdir");
+        closedir(dir);
+        return 0;
+    }
+}
 
 int help(){
 	printf("%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n",
 			"Opzioni accettate dal client: ",
 			"-h",
 			"-f filename",
-			"-wdirname[,n=0]",
+			"-w dirname[,n=0]",
 			"-W file1[,file2]",
 			"-r file1[,file2]",
 			"-R [n=0]",
@@ -271,12 +375,13 @@ int disconnect(char *args){
 
 int W_req(char *args,char *dirname){				//args lista di file da scrivere separati da virgola
 									
-	char *tmpstr;													
+	char *tmpstr;		
+	printf("args %s\n",args);											
 	char *token = strtok_r(args, ",", &tmpstr);
 	char *resolvedpath;
-	int i = 0;
-	
+	printf("token %s\n",token);
 	while (token) {
+		printf("sto scrivendo il file\n");
 		resolvedpath = realpath(token, NULL);
 		if(!resolvedpath)
 			resolvedpath = realpath(token, NULL);
@@ -301,7 +406,6 @@ int r_req(char *args,char *dirname){				//args lista di file da leggere separati
 									
 	char *tmpstr;													
 	char *token = strtok_r(args, ",", &tmpstr);
-	int i = 0;
 	char *buf = NULL;
 	size_t filesize = -1;
 	int len = strlen(dirname) + 1;
