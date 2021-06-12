@@ -92,7 +92,7 @@ static int open_file(const char *file_to_read,char *path_to_dir){		//legge il fi
 	if((fd_file = open(path_to_dir, O_CREAT|O_WRONLY, 0666)) == -1)
 		return -1;
 
-	return writen(fd_file,file_to_read,size);
+	return writen(fd_file,(void * )file_to_read,size);
 
 }
 //*************************************FUNZIONI DELL'API********************************************************************************
@@ -214,7 +214,7 @@ int openFile(const char* pathname, int flags){
 	if(writen(client_fd, &lenght, sizeof(int)) == -1)		//mando la lunghezza del pathname
 		return -1;
 
-	if(writen(client_fd, pathname, lenght) == -1)				//mando il pathname
+	if(writen(client_fd, (void * )pathname, lenght) == -1)				//mando il pathname
 		return -1;
 
 	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
@@ -297,20 +297,25 @@ int readFile(const char* pathname, void** buf, size_t*size){
 	if(print_flag)
 			printf("richiesta di lettura del file <%s>\n",pathname);
 
-	if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
+	if(writen(client_fd, &request, sizeof(request)) == -1){		//mando il tipo di richiesta
+		errno = ECANCELED;
 		return -1;
-
+	}
 	int lenght = strlen(pathname)+1;
-	if(writen(client_fd, &lenght, sizeof(int)) == -1)		//mando la lunghezza del pathname
+	if(writen(client_fd, &lenght, sizeof(int)) == -1){		//mando la lunghezza del pathname
+		errno = ECANCELED;
 		return -1;
-
-	if(writen(client_fd, pathname, lenght) == -1)				//mando il pathname
+	}
+	if(writen(client_fd, (void * )pathname, lenght) == -1){				//mando il pathname
+		errno = ECANCELED;
 		return -1;
+	}
 
 	size_t answer = -1;
-	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server che equivale al size del file
+	if(readn(client_fd, &answer, sizeof(answer)) == -1){		//ricevo la risposta dal server che equivale al size del file
+		errno = ECANCELED;
 		return -1;
-
+	}
 	if(answer == -1){
 		errno = ECANCELED;
 		return -1;
@@ -318,16 +323,53 @@ int readFile(const char* pathname, void** buf, size_t*size){
 
 	*buf = malloc(answer);
 		if(!*buf){
-			errno = ECANCELED;
+			errno = ENOMEM;
 			return -1;
 		}
 	memset(*buf,'\0',answer);
 	int read;
-	if((read = readn(client_fd, *buf, answer)) == -1)		//scrivo il file mandato dal server nel buffer
+	if((read = readn(client_fd, *buf, answer)) == -1){		//scrivo il file mandato dal server nel buffer
+		errno = ECANCELED;
 		return -1;
-
+	}
 	*size = answer;
 	if(print_flag)
-			printf("richiesta di lettura del file <%s> ha avuto successo\n",pathname);
+			printf("la richiesta di lettura del file <%s> ha avuto successo\n",pathname);
+	return 0;
+}
+
+
+int removeFile(const char* pathname){
+
+	int request = RM;
+	if(print_flag)
+			printf("richiesta di rimozione del file <%s>\n",pathname);
+
+	if(writen(client_fd, &request, sizeof(request)) == -1){		//mando il tipo di richiesta
+		errno = ECANCELED;
+		return -1;
+	}
+
+	int lenght = strlen(pathname)+1;
+	if(writen(client_fd, &lenght, sizeof(int)) == -1){		//mando la lunghezza del pathname
+		errno = ECANCELED;
+		return -1;
+	}
+	if(writen(client_fd, (void * )pathname, lenght) == -1){				//mando il pathname
+		errno = ECANCELED;
+		return -1;
+	}
+
+	int answer = 1;
+	if(readn(client_fd, &answer, sizeof(answer)) == -1){		//ricevo la risposta dal server che equivale al size del file
+		errno = ECANCELED;
+		return -1;
+	}
+	if(answer == -1){
+		errno = ECANCELED;
+		return -1;
+	}
+	if(print_flag)
+			printf("la richiesta di rimozione del file <%s> ha avuto successo\n",pathname);
 	return 0;
 }
