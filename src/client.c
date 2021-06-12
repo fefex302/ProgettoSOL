@@ -2,29 +2,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <getopt.h>
+#include <ctype.h>
+#include <stdarg.h>
+#include <dirent.h>
 #include <time.h>
+#include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <limits.h>
-#include <assert.h>
-#include <libgen.h>
-#include <dirent.h>
+
+#include <pwd.h>
+#include <grp.h>
+#include <stddef.h>
+
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/uio.h>
 #include <sys/un.h>
 #include <sys/stat.h>
-
+#include <sys/time.h>
 #include "api.h"
 #include "utils.h"
-
-#define BUF_LEN 100
-#define BUF_LEN_2 25
-#define MSEC 10
-#define MAX_FILE_NAME 2048
-
-extern int print_flag;	//variabile che identifica se la stampa delle operazioni è abilitata
 
 #define NULL_EXIT(X,str)	\
   if ((X)==NULL) {			\
@@ -43,429 +39,295 @@ extern int print_flag;	//variabile che identifica se la stampa delle operazioni 
     perror(#str);			\
     exit(EXIT_FAILURE);			\
   }
-int parse_arguments(char *buf,char *buf2[]);
-int help();
-int f_req(char* args);
-int disconnect(char *args);
-int W_req(char *args,char *dirname);
-int r_req(char *args,char *dirname);
-int w_parse(char *args, char *wdirname, long *nFileToSend);
-int w_req( const char* nomedir, long* n );
 
-typedef struct _arg_list{
-    char* arg;
-    struct _arg_list* next;
-} arg_list;
+#define MINUS_ONE_RETURN(X,str)\
+  if ((X)==-1) {			\
+    perror(#str);			\
+    return -1;			\
+  }
 
-int isdot(const char dir[]) {
-  int l = strlen(dir);
+#define MINUS_ONE_RETURN_NULL(X,str)\
+  if ((X)==-1) {			\
+    perror(#str);			\
+    return NULL;			\
+  }
 
-  if ( (l>0 && dir[l-1] == '.') ) return 1;
-  return 0;
-}
+static int openwrite = 0;
+static int client_fd;
+static int connection_active = 0;
+static struct sockaddr_un server_address;
+int print_flag = 0;
 
-//*******************************************MAIN*****************************************************************************
-int main(int argc,char* argv[]){
-
-	if(argc == 1){
-		printf("usare almeno un argomento, lanciare con opzione -h per vedere le richieste possibili\n");
-		return 0;
-	}
-
-	int opt;
-	int end = 0;	//usato per terminare il client
-
-	char *sockname = NULL;
-	char *read_dirname = NULL;	//cartella dove memorizzare i file letti dal server	
-	char *dirname = NULL;
-	int d=0,r=0,R=0,h=0,f=0,p=0;
-
-	for(int i = 1; i<argc; i++){
-		if(strncmp(argv[i],"-d",3) == 0){
-			d = i;
-			printf("indice %d\n",d);
-		}
-		else if(strcmp(argv[i],"-r") == 0)
-			r = i;
-		else if(strcmp(argv[i],"-R") == 0)
-			R = i;
-		else if(strcmp(argv[i],"-h") == 0)
-			h = i;
-		else if(strcmp(argv[i],"-f") == 0)
-			f = i;
-		else if(strcmp(argv[i],"-p") == 0)
-			p = i;
-	}
-	if(h > 0){
-		help();
-		return 0;
-	}
-
-	if(f > 0){
-		f++;
-		printf("tentativo di connessione con il socket << %s >>\n",argv[f]);
-		if(f_req(argv[f]) != 0){
-			printf("connessione con il socket << %s >> fallita\n",argv[f]);
-			return 0;
-		}
-		else{
-			printf("connessione con il socket << %s >> stabilita\n",argv[f]);
-			sockname = argv[f];
-		}
-	}
-	else{
-		printf("prima di svolgere operazioni è necessario stabilire prima una connessione con il server\nusare -f nomesocket\n");
-		return 0;
-	}
-
-
-	if(d>0){
-		if(r>0){
-			d++;
-			read_dirname = argv[d];
-		}
-		else if(R>0){
-			d++;
-			read_dirname = argv[d];
-		}
-		else{
-			printf("-d ha bisogno di almeno uno tra -r o -R\n");
-			end = 1;
-		}
-	}
-	printf("read dirname %s\n",read_dirname);
-	//abilito le stampe delle operazioni
-	if(p>0){
-		print_flag = 1;
-	}
-		
-	opterr = 0;
-	long nFileToSend = -1;
-	char wdirname[MAX_FILE_NAME];
-	memset(wdirname,'\0',MAX_FILE_NAME);
-
-	while ((opt = getopt(argc,argv, ":hf:w:W:r:R:d:t:l:u:c:p")) != -1 && !end) {
-		switch(opt) {
-			case 'h':  
-				break;
-			case 'f':
-				break;
-			case 'w':
-				if(w_parse(optarg,wdirname,&nFileToSend) == 0){
-					w_req(wdirname,&nFileToSend);
-				}
-				else {
-					printf("-w: errore nel parsing degli argomenti\n");
-				}
-				break;
-			case 'W': 
-				W_req(optarg,dirname);
-				break;
-			case 'r':  
-				r_req(optarg,read_dirname);
-				break;
-			case 'R': 
-				printf("R con argomenti\n");
-				break;
-			case 'd': 
-				break;
-			case 't':  
-				break;
-			case 'l':  
-				break;
-			case 'u':  
-				break;
-			case 'c':  
-				break;
-			case 'p': 
-				break;
-			case ':': 
-				switch(optopt){
-					case 'R':
-						printf("ciaoooooo\n");
-						break;
-					case 't':
-						printf("t senza argomenti\n");
-						break;
-					default:
-			   			printf("l'opzione '-%c' richiede un argomento\n", optopt);
-				} break;
-			case '?': {  // restituito se getopt trova una opzione non riconosciuta
-				printf("l'opzione '-%c' non e' gestita\n", optopt);
-				    } break;
-				default:;
-    	}
-    	sleep(1);
-  	}
-  	sleep(1);
-	if(sockname != NULL)
-		disconnect(sockname);
-  	return 0;
-
-
-
-
-}
-
-
-int parse_arguments(char *buf,char *buf2[]){
-
-	char *tmpstr;													
-	char *token = strtok_r(buf, " ", &tmpstr);
-	int i = 1;
-
-	while (token) {
-		buf2[i] = calloc(strlen(token)+1,sizeof(char));
-
-		if(buf2[i] == NULL)	//controllo manuale dato che mi dava warning con la funzione NULL_EXIT
-			exit(1);
-
-		memset(buf2[i],'\0',sizeof(char));
-    	//buf2[i] = token;
-    	strncpy(buf2[i],token,strlen(token)+1);
-    	token = strtok_r(NULL, " ", &tmpstr);
-    	i++;
-    }
-    buf2[i-1][strcspn(buf2[i-1], "\n")] = '\0';			//setto l'ultimo carattere della stringa a \0
-    int n = i;
-    //buf2[BUF_LEN_2-1] = NULL;
-    while(i<BUF_LEN_2){		//setto tutte le stringhe non inizializzate a NULL dato che potrebbero contenere comandi 
-    	buf2[i] = NULL;			//usati in precedenza
-    	i++;
-    }
-
-    return n;
-}
-
-int w_parse(char *args, char *wdirname, long *nFileToSend){
-	int i = 0;
-	while(args[i] != '\0' && args[i] != ',')
-		i++;
-	if(args[i] != '\0'){
-		strncpy(wdirname, args, i);
-		printf("DIRNAME %s\n",wdirname);
-		char aux[11];
-		memset(aux,'\0',11);
-		strncpy(aux, args+i, 11);
-		printf("AUX %s\n",aux);
-		if(aux[0] != 'n' && aux[1]!= '=')
-			return -1;
-		else {
-			if(isNumber(aux+2, nFileToSend) != 0)
-				return -1;
-		}
-	}
-	else{
-		strncpy(wdirname, args, i+1);
-		printf("DIRNAME %s\n",wdirname);
-	}
-
-	return 0;
+//*************************************FUNZIONI STATICHE DI UTILITÀ***************************************************************
+static char* read_file(int fd_file,const char *file_path, size_t *size){		//legge un file e restituisce nel campo file_return 
+																				//una stringa contenente tutti i bit del file
+	if((fd_file = open(file_path,O_RDONLY)) == -1)								
+		return NULL;															
 	
+	struct stat buf;
+	MINUS_ONE_RETURN_NULL(fstat(fd_file, &buf),"fstat");
+
+	*size = buf.st_size;
+	char *file_return;
+
+	if((file_return = malloc(buf.st_size+1)) == NULL)
+		return NULL;
+	
+	if(readn(fd_file, file_return, buf.st_size+1) == -1)
+		return NULL;
+	close(fd_file);
+	return file_return;
+
 }
 
-int w_req( const char* nomedir, long* n ){
 
-    // controllo se il parametro sia una directory
-    struct stat statbuf;
-    memset(&statbuf, '0', sizeof(statbuf));
-    MINUS_ONE_EXIT(stat(nomedir, &statbuf), "stat");
+static int open_file(const char *file_to_read,char *path_to_dir){		//legge il file contenuto nella stringa e se una cartella
+	if(path_to_dir == NULL)									//di salvataggio è settata allora crea un file in quella cartella
+		return 0;		
 
-    DIR *dir;
-    if((dir = opendir(nomedir)) == NULL){
-        perror("opendir");
+	size_t size = strlen(file_to_read);
+
+	int fd_file;
+
+	if((fd_file = open(path_to_dir, O_CREAT|O_WRONLY, 0666)) == -1)
+		return -1;
+
+	return writen(fd_file,file_to_read,size);
+
+}
+//*************************************FUNZIONI DELL'API********************************************************************************
+
+
+int openConnection( const char* sockname, int msec,const struct timespec abstime ){
+
+    if(!sockname || (msec < 0)){
+        errno = EINVAL;
         return -1;
-    }else{
-        struct dirent* file;
+    }
 
-        while(*n != 0 && (errno = 0, file = readdir(dir)) != NULL){
-            struct stat statbuf;
-            char filename[MAX_FILE_NAME];
-            int len1 = strlen(nomedir);
-            int len2 = strlen(file->d_name);
-            if((len1 + len2 + 2) > MAX_FILE_NAME){
-                fprintf(stderr, "ERROR: MAX_FILE_NAME too small : %d\n", MAX_FILE_NAME);
-                return -1;
-            }
-            strncpy(filename, nomedir, MAX_FILE_NAME-1);
-            strncat(filename, "/", MAX_FILE_NAME-1);
-            strncat(filename, file->d_name, MAX_FILE_NAME-1);
-fprintf(stdout, "Nome del file che sto esaminando: '%s'\n", filename);
-            if(stat(filename, &statbuf)==-1) {
-              perror("eseguendo la stat");
-              fprintf(stderr, "ERROR: Error in file %s\n", filename);
-              return -1;
-            }
+    if((client_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
+        return -1;
 
-            if(S_ISDIR(statbuf.st_mode)){
-                      if ( !isdot(filename) ){
-fprintf(stdout, "L'elemento che sto per visitare è una directory di nome '%s'\n", filename);
-                          int res = w_req(filename,n);
-                          if(res == -1) return -1;
-                      }
-            }else{
-            	printf("scrivo il file\n");
-                *n = *n - 1;
-               W_req(filename,NULL);
-           }
+    memset(&server_address, '0', sizeof(server_address));
+    server_address.sun_family = AF_UNIX;
+    strncpy(server_address.sun_path, sockname, strlen(sockname)+1);
+
+    struct timespec sleeptime;
+    sleeptime.tv_sec = 0;
+    sleeptime.tv_nsec = msec * 1000000;
+    struct timespec time_request;
+    time_request.tv_sec = 0;
+    time_request.tv_nsec = msec * 1000000;
+
+    struct timespec current_time;
+    memset(&current_time, '0', sizeof(current_time));
+
+    do{
+        if(connect(client_fd, (struct sockaddr*) &server_address, sizeof(server_address)) != -1){
+        	connection_active = 1;
+            return 0;
         }
-        if (errno != 0) perror("readdir");
-        closedir(dir);
-        return 0;
+
+        nanosleep(&sleeptime, &time_request);
+
+        if(clock_gettime(CLOCK_REALTIME, &current_time) == -1){
+        	//close(client_fd);
+            return -1;
+        }
+
+    }while(current_time.tv_sec < abstime.tv_sec ||
+        current_time.tv_nsec < abstime.tv_nsec);
+
+    return -1;
+}
+
+//EINVAL: sto passando un sockname nullo
+//EFAULT: sto chiudendo una connessione inesistente
+int closeConnection( const char* sockname ){
+    if(!sockname){
+        errno = EINVAL;
+        return -1;
+    }
+
+    if(strncmp(server_address.sun_path, sockname, strlen(sockname)+1) ==  0){
+    	int req = CLOSE;
+    	if(writen(client_fd, &req, sizeof(int)) == -1)
+    		return -1;
+    	if(readn(client_fd, &req, sizeof(int)) == -1)
+    		return -1;
+        return close(client_fd);
+    }else{
+        errno = EFAULT;
+        return -1;
     }
 }
 
-int help(){
-	printf("%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n",
-			"Opzioni accettate dal client: ",
-			"-h",
-			"-f filename",
-			"-w dirname[,n=0]",
-			"-W file1[,file2]",
-			"-r file1[,file2]",
-			"-R [n=0]",
-			"-d dirname",
-			"-t time",
-			"-l file1[,file2]",
-			"-u file1[,file2]",
-			"-c file1[,file2]",
-			"-p");
-	return 1;
+//EPERM: connessione non attiva
+//EINVAL: sto passando un pathname nullo
 
-}
+int openFile(const char* pathname, int flags){
 
-int f_req(char* args){
-	struct timespec abstime;
-	MINUS_ONE_EXIT(clock_gettime(CLOCK_REALTIME,&abstime),"clock_gettime");
-	abstime.tv_sec += 10;
-	
-	char *s = malloc(strlen(args)+1);
-	if(!s)
-		s = malloc(strlen(args)+1);
-	if(!s)
-		exit(EXIT_FAILURE);
-	memset(s,'\0',strlen(args)+1);
-
-	strncpy(s,args,strlen(args)+1);
-	if(openConnection(s,MSEC,abstime) == -1){
-		free(s);
+	if(!connection_active){
+		errno = EPERM;
+		printf("eperm\n");
 		return -1;
 	}
-	else{
-		free(s);
-		return 0;
+
+	if(pathname == NULL){
+		errno = EINVAL;
+		printf("einval\n");
+		return -1;
 	}
-}
 
+	int request;
+	if(flags == 0){
+		if(print_flag)
+			printf("richiesta di apertura in sola lettura del file <%s>\n",pathname);
+		request = OPN;
+	}
+	else if(flags == O_CREATE){
+		if(print_flag)
+			printf("richiesta di apertura in modalità creazione del file <%s>\n",pathname);
+		request = OPNC;
+	}
+	else if(flags == O_LOCK){
+		if(print_flag)
+			printf("richiesta di apertura in modalità locked del file <%s>\n",pathname);
+		request = OPNL;
+	}
+	else if(flags == O_LOCK_CREATE){
+		if(print_flag)
+			printf("richiesta di apertura in modalità locked e creazione del file <%s>\n",pathname);
+		request = OPNCL;
+	}
 
-int disconnect(char *args){
+	int answer;
+
+	if(openwrite == 0){
+		if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
+			return -1;
+	}
+	else 
+		openwrite = 0;
+
+	int lenght = strlen(pathname)+1;
+	if(writen(client_fd, &lenght, sizeof(int)) == -1)		//mando la lunghezza del pathname
+		return -1;
+
+	if(writen(client_fd, pathname, lenght) == -1)				//mando il pathname
+		return -1;
+
+	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
+		return -1;
+
+	if(answer == -1){
+		errno = ECANCELED;
+		return -1;
+	}
+
 	if(print_flag)
-		printf("richiesta di chiusura della connessione\n");
-	if(closeConnection(args) != -1){
+			printf("la richiesta di apertura del file <%s> ha avuto successo\n",pathname);
+	return 0;
+
+
+}
+
+int writeFile(const char* pathname, const char*dirname){
+	int request = WRT;
+	openwrite = 1;
+	int retval = 0;
+	int fd_file;
+	char* file_to_send = NULL;
+	size_t size;
+
+	if((file_to_send = read_file(fd_file, pathname, &size)) == NULL){
 		if(print_flag)
-			printf("connessione chiusa\n");
-		return 0;
-	}
-	else {
-		if(print_flag)
-			printf("richiesta di chiusura della connessione fallita\n");
+			printf("file <%s> inesistente\n",pathname);
 		return -1;
 	}
 
+	if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
+		return -1;
+
+	if((retval = openFile(pathname,O_LOCK_CREATE)) == -1){
+		if(print_flag)
+			printf("richiesta di apertura in modalità creazione e lock del file <%s> fallita\n",pathname);
+		errno = ECANCELED;
+		return -1;
+	}
+
+	if(writen(client_fd, &size, sizeof(size)) == -1)			//mando la lunghezza del file
+		return -1;
+
+	if(writen(client_fd, file_to_send, size) == -1)				//mando il file
+		return -1;
+	free(file_to_send);
+	int answer;
+
+	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
+		return -1;
+
+	if(answer == -1){
+		if(print_flag)
+			printf("la richiesta di scrittura del file <%s> è fallita\n",pathname);
+		errno = ECANCELED;
+		return -1;
+	}
+
+	//protocollo di risposta del server: se va tutto bene ritorno il numero di file
+	//rimpiazzati nel server per fare spazio al file spedito, che può essere un numero che
+	//va da 0 in poi, quindi ciclerò un numero di volte pari al valore di risposta e memorizzerò
+	//i file nella cartella indicata se questa è diversa da NULL
+	if(dirname != NULL){			
+		printf("ancora da fare\n");
+	}
+
+	if(print_flag){
+		printf("la richiesta di scrittura del file <%s> ha avuto successo\n",pathname);
+		printf("bytes scritti: %zu\n",size);
+	}
+	return retval;
+
 }
 
-int W_req(char *args,char *dirname){				//args lista di file da scrivere separati da virgola
-									
-	char *tmpstr;		
-	printf("args %s\n",args);											
-	char *token = strtok_r(args, ",", &tmpstr);
-	char *resolvedpath;
-	printf("token %s\n",token);
-	while (token) {
-		printf("sto scrivendo il file\n");
-		resolvedpath = realpath(token, NULL);
-		if(!resolvedpath)
-			resolvedpath = realpath(token, NULL);
-		if(!resolvedpath)
-			exit(EXIT_FAILURE);
 
-		if(writeFile(resolvedpath,dirname) != 0){		
-			if(print_flag)
-				printf("richiesta di scrittura del file <%s> è fallita\n",token);
+
+int readFile(const char* pathname, void** buf, size_t*size){
+	int request = RD;
+	if(print_flag)
+			printf("richiesta di lettura del file <%s>\n",pathname);
+
+	if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
+		return -1;
+
+	int lenght = strlen(pathname)+1;
+	if(writen(client_fd, &lenght, sizeof(int)) == -1)		//mando la lunghezza del pathname
+		return -1;
+
+	if(writen(client_fd, pathname, lenght) == -1)				//mando il pathname
+		return -1;
+
+	size_t answer = -1;
+	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server che equivale al size del file
+		return -1;
+
+	if(answer == -1){
+		errno = ECANCELED;
+		return -1;
+	}
+
+	*buf = malloc(answer);
+		if(!*buf){
+			errno = ECANCELED;
+			return -1;
 		}
-		free(resolvedpath);
-    	token = strtok_r(NULL, ",", &tmpstr);
-    	
-    }
-   
-    return 0;
+	memset(*buf,'\0',answer);
+	int read;
+	if((read = readn(client_fd, *buf, answer)) == -1)		//scrivo il file mandato dal server nel buffer
+		return -1;
 
-}
-
-
-int r_req(char *args,char *dirname){				//args lista di file da leggere separati da virgola
-	if(!args)
-		return -1;				
-	char *tmpstr;													
-	char *token = strtok_r(args, ",", &tmpstr);
-	void *buf = NULL;
-	size_t filesize = -1;
-	int len = strlen(dirname) + 1;
-	int n = 0;
-	while (token) {
-
-		if(readFile(token, &buf, &filesize) != 0){		
-			if(print_flag)
-				printf("richiesta di lettura del file <%s> è fallita\n",token);
-		}
-
-  
-    	if(dirname != NULL  && buf!= NULL && filesize != -1){
-    		//******************DO ERROR MANAGEMENT *****************************
-			int fd_file;
-		    char str[10];
-		    printf("cartella %s\n",dirname);
-			
-			char namefile[40] = {'f','i','l','e'};
-			if(sprintf(str, "%d", n) <0){
-				token = strtok_r(NULL, ",", &tmpstr);
-				continue;
-			}
-
-			strncat(namefile,str,strlen(str));
-
-			char* dirfile = malloc(len+strlen(namefile));
-			if(!dirfile){
-				token = strtok_r(NULL, ",", &tmpstr);
-				continue;
-			}
-			memset(dirfile,'\0',len);
-
-			strncpy(dirfile,dirname,len);
-
-			strncat(dirfile, namefile, strlen(namefile));
-			n++;
-			printf("cartella %s\n",dirfile);
-			//******************************************************************
-			if((fd_file = open(dirfile, O_CREAT|O_WRONLY, 0666)) == -1){
-				perror("open");
-				token = strtok_r(NULL, ",", &tmpstr);
-				continue;
-			}
-
-			if(writen(fd_file, buf, filesize) == -1){
-				perror("writen");
-				token = strtok_r(NULL, ",", &tmpstr);
-				continue;
-			}
-			close(fd_file);
-			free(dirfile);
-    	}		
-    	token = strtok_r(NULL, ",", &tmpstr);
-						
-    	free(buf);
-    }
-   
-    return 0;
-
+	*size = answer;
+	if(print_flag)
+			printf("richiesta di lettura del file <%s> ha avuto successo\n",pathname);
+	return 0;
 }
