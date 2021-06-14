@@ -99,6 +99,7 @@ int updatemax(fd_set set, int fdmax) {
 
 int fifo_insert(fileT *fileToInsert);
 int fifo_remove();
+int fifo_remove_equal(char *pathname);
 int config_file_parser(char *stringa, config_parameters* cfg);
 int config_values_correctly_initialized(config_parameters *cfg);
 void *worker_t(void *args);
@@ -107,6 +108,7 @@ fileT* opn(int flag,int connfd, int *error);
 int cls(int connfd,char* pathname);
 int rm(int connfd, int *error);
 int rd(int connfd, int *error);
+int lo(int connfd, int *error);
 //***********************************VARIABILI GLOBALI*************************************************************
 static output_info out_put;				//dati da stampare a schermo all'uscita del programma
 static config_parameters configs;		//parametri di configurazione passati dal file config.txt
@@ -368,7 +370,9 @@ int main(int argc,char *argv[]){
     	free(tmp);
     }
     icl_hash_destroy(file_server, NULL, NULL);
-    printf("replace_algo = %d\n",out_put.replace_algo);
+    printf("il numero massimo di file memorizzati nel server è stato %d \n",out_put.max_file_stored);
+    printf("il numero massimo di spazio utilizzato nel server è stato %d \n",out_put.max_size_reached);
+    printf("l'algoritmo di rimpiazzamento è stato usato %d volte\n",out_put.replace_algo);
     return 0;
 
 }
@@ -491,6 +495,8 @@ void *worker_t(void *args){
 				break;	
 
 			case LO:
+				printf("answer \n");
+				lo(curfd, &error);
 				break; 	
 
 			case UN:	
@@ -500,7 +506,8 @@ void *worker_t(void *args){
 				break;
 
 			case RM:
-				answer = rm(curfd, &error);
+			printf("answer \n");
+				rm(curfd, &error);
 				break;	
 
 			case CLOSE: 
@@ -551,10 +558,9 @@ void *worker_t(void *args){
 }
 
 
-
 fileT* opn(int flag, int connfd, int *error){
-
-		int dimpath;
+	printf("open\n");
+		size_t dimpath;
 	    char* path = NULL;
 	    fileT *tmp = NULL;
 	    int n;
@@ -608,15 +614,6 @@ fileT* opn(int flag, int connfd, int *error){
 	    				UNLOCK(&tmp->filemtx);
 	    			}
 
-	    			LOCK(&serverstatsmtx);
-	    			file_stored ++;
-  					UNLOCK(&serverstatsmtx);
-
-    				if(answer != -1){
-	    				LOCK(&filesopenedmtx);
-	    				insert_listfiles(connfd, &tmp, &filesopened);
-	    				UNLOCK(&filesopenedmtx);
-	    			}
         			break;
 
         		case OPNL:
@@ -651,6 +648,7 @@ fileT* opn(int flag, int connfd, int *error){
 
         		case OPNCL:
         			LOCK(&servermtx);
+        			printf("open1\n");
         			if((tmp = icl_hash_find(file_server, path)) == NULL){
 	        			if((tmp = icl_hash_insert(file_server, path, NULL)) == NULL){
 	        				UNLOCK(&servermtx);
@@ -664,7 +662,7 @@ fileT* opn(int flag, int connfd, int *error){
 	    				tmp->user = con;
 	    				UNLOCK(&servermtx);
 	    			}
-	    			else {
+	    			else {printf("open2\n");
 	    				LOCK(&tmp->filemtx);
 	    				UNLOCK(&servermtx);
     					tmp->open_lock = 1;
@@ -672,7 +670,7 @@ fileT* opn(int flag, int connfd, int *error){
 	    				UNLOCK(&tmp->filemtx);
 	    			}
 
-
+	    			printf("open3\n");
     				if(answer != -1){
 	    				LOCK(&filesopenedmtx);
 	    				insert_listfiles(connfd, &tmp, &filesopened);
@@ -681,6 +679,7 @@ fileT* opn(int flag, int connfd, int *error){
         			break;
         	}
    		}
+   		printf("open\n");
    		if(writen(connfd, &answer, sizeof(int)) == -1){
    			*error = 1;
    			return NULL;
@@ -709,7 +708,6 @@ int wrt(int connfd, int *error){
 		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
-
 	if((contenuto = malloc(sizeof(char) * dim)) == NULL){
 		*error = 1;
 		UNLOCK(&tmp->filemtx);
@@ -741,24 +739,20 @@ int wrt(int connfd, int *error){
 	//se non ho spazio a sufficienza nel server allora applico il rimpiazzamento
 	LOCK(&servermtx);
 	LOCK(&serverstatsmtx);
-	printf("FILE STORED%d\n",file_stored);
 	while((configs.MAX_FILE_NUMBER - file_stored) <= 0 || (configs.SERVER_CAPACITY_BYTES - bytes_used) < dim){
 		if((dimfreed = fifo_remove()) == -1){				//il rimpiazzamento può fallire perchè tutti i file o alcuni sono lockati e non posso toglierli
 			answer = -1;
 			icl_hash_delete(file_server, tmp->key, NULL, NULL);
-			UNLOCK(&servermtx);
-			LOCK(&serverstatsmtx);
-			file_stored --;
-			UNLOCK(&serverstatsmtx);
 			if(writen(connfd, &answer, sizeof(int)) == -1){
 				*error = 1;
+				UNLOCK(&servermtx);
+				UNLOCK(&serverstatsmtx);
 				return -1;
 			}
 		}
 		else{
 			file_stored --;
 			bytes_used = bytes_used - dimfreed; 
-			out_put.replace_algo ++;
 		}
 
 	}
@@ -782,10 +776,11 @@ int wrt(int connfd, int *error){
 	//aggiorno le stats del server
 	LOCK(&serverstatsmtx);
 	file_stored ++;
-	bytes_used = bytes_used + dim;
 	bytes_used = bytes_used + (long)dim;
-	if((bytes_used + dim) > out_put.max_size_reached)
-		out_put.max_size_reached = bytes_used + dim;
+	if(bytes_used > out_put.max_size_reached)
+		out_put.max_size_reached = bytes_used;
+	if(file_stored > out_put.max_file_stored)
+		out_put.max_file_stored = file_stored;
 	UNLOCK(&serverstatsmtx);
 
 	//mando risposta al client
@@ -809,7 +804,7 @@ int rm(int connfd, int *error){
 	size_t dim;
 	int answer = 0;
 	fileT *tmp;
-	
+
 	if(readn(connfd, &dim, sizeof(size_t)) == -1){
 		*error = 1;
 		return -1;
@@ -819,39 +814,52 @@ int rm(int connfd, int *error){
 		*error = 1;
 		return -1;
 	}
-
 	memset(pathname,'\0',dim);
 
 	if(readn(connfd, pathname, dim)==-1){
 		*error = 1;
+		free(pathname);
 		return -1;
 	}
-	
 
 	LOCK(&servermtx);
-		if((tmp = icl_hash_find(file_server, pathname)) != NULL){
-			if(tmp->open_lock == 1 && tmp->user == connfd){
-				LOCK(&tmp->filemtx);
-				answer = icl_hash_delete(file_server, pathname, NULL, NULL);
-				UNLOCK(&tmp->filemtx);
-			}
-			else
-				answer = -1;
-		}
-		else 
-			answer = -1;
-	UNLOCK(&servermtx);
+	if((tmp = icl_hash_find(file_server, pathname)) != NULL){
+		if(tmp->open_lock == 1 && tmp->user == connfd){
+			LOCK(&tmp->filemtx);
+			dim = tmp->size;
+			//devo togliere il file anche dalla coda fifo
+			fifo_remove_equal(pathname);
 
+			answer = icl_hash_delete(file_server, pathname, NULL, NULL);
+
+			}
+		else{
+			UNLOCK(&tmp->filemtx);
+
+			answer = -1;
+			}
+		}
+		else {
+
+			answer = -1;
+		}
+	LOCK(&serverstatsmtx);
+	file_stored --;
+	bytes_used = bytes_used - (long)dim;
+	UNLOCK(&serverstatsmtx);
+	UNLOCK(&servermtx);
 	LOCK(&filesopenedmtx);
 	remove_if_equalpath(pathname, &filesopened);
 	UNLOCK(&filesopenedmtx);
 
 	if(writen(connfd, &answer, sizeof(int)) == -1){
 		*error = 1;
+		free(pathname);
 		return -1;
 	}
+	free(pathname);
 	return answer;
-}
+	}
 
 
 int cls(int connfd,char* pathname){
@@ -881,10 +889,10 @@ int cls(int connfd,char* pathname){
 
 int rd(int connfd, int *error){
 	char* pathname;
-	int dim;
+	size_t dim;
 	fileT *tmp;
 	int answer = 0;
-	if(readn(connfd, &dim, sizeof(int)) == -1){		//leggo dimensione del pathname
+	if(readn(connfd, &dim, sizeof(size_t)) == -1){		//leggo dimensione del pathname
 		*error = 1;
 		return -1;
 	}
@@ -946,6 +954,61 @@ int rd(int connfd, int *error){
 
 }
 
+int lo(int connfd, int *error){
+	char* pathname;
+	size_t dim;
+	fileT *tmp;
+	int answer = 0;
+	if(readn(connfd, &dim, sizeof(size_t)) == -1){		//leggo dimensione del pathname
+		*error = 1;
+		return -1;
+	}
+
+
+	if((pathname = malloc(sizeof(char) * dim)) == NULL){		//alloco spazio pathname
+		*error = 1;
+		return -1;
+	}
+
+	memset(pathname,'\0',dim);
+
+	if(readn(connfd, pathname, dim) == -1){			//leggo pathname
+		*error = 1;
+		return -1;
+	}
+
+	LOCK(&servermtx);
+	if((tmp = icl_hash_find(file_server, pathname)) == NULL){
+		answer = -1;
+		free(pathname);
+		UNLOCK(&servermtx);
+	}
+	else{
+		LOCK(&tmp->filemtx);
+		UNLOCK(&servermtx);
+		if(tmp->open_lock == 0 && tmp->open_create == 0){
+			tmp->open_lock = 1;
+			tmp->user = connfd;
+		}
+		else if(tmp->open_lock == 1){
+			if(tmp->user == connfd)
+				answer = 1;
+		}
+
+		else
+			answer = -1;
+		UNLOCK(&tmp->filemtx);
+	}
+	if(writen(connfd, &answer, sizeof(int)) == -1){
+		*error = 1;
+		free(pathname);
+		return -1;
+	}
+	printf("%d %d %d\n",tmp->open_create, tmp->open_lock, tmp->user);
+	free(pathname);
+	return answer;
+}
+
 int fifo_insert(fileT *fileToInsert){
 	LOCK(&fifoqueuemtx);
 	fifoStruct *new = malloc(sizeof(fifoStruct));
@@ -968,6 +1031,7 @@ int fifo_insert(fileT *fileToInsert){
 }
 
 int fifo_remove(){
+	out_put.replace_algo ++;
 	size_t DimFreed = 0;
 	fifoStruct *tmp = NULL;
 	fifoStruct *curr = fifoqueue;
@@ -982,6 +1046,9 @@ int fifo_remove(){
 			}
 			else
 				fifoqueue = fifoqueue->next;
+
+			if(fifoqueue == NULL)
+				fifoqueueLast = NULL;
 			retval = icl_hash_delete(file_server, curr->fileInServer->key, NULL, NULL);
 			free(curr);
 			if(retval == -1){
@@ -996,5 +1063,26 @@ int fifo_remove(){
 	}
 	UNLOCK(&fifoqueuemtx);
 	return DimFreed;
+}
+
+int fifo_remove_equal(char *pathname){
+	fifoStruct *tmp = NULL;
+	fifoStruct *curr = fifoqueue;
+	LOCK(&fifoqueuemtx);
+	while(curr != NULL ){
+		if(strcmp(curr->fileInServer->key, pathname) == 0 ){
+			if(tmp != NULL){
+				tmp->next = curr->next;
+			}
+			else
+				fifoqueue = fifoqueue->next;
+			free(curr);
+			break;
+		}
+		tmp = curr;
+		curr = curr->next;
+	}
+	UNLOCK(&fifoqueuemtx);
+	return 0;
 }
 
