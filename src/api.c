@@ -309,8 +309,8 @@ int readFile(const char* pathname, void** buf, size_t*size){
 		errno = ECANCELED;
 		return -1;
 	}
-	int lenght = strlen(pathname)+1;
-	if(writen(client_fd, &lenght, sizeof(int)) == -1){		//mando la lunghezza del pathname
+	size_t lenght = strlen(pathname)+1;
+	if(writen(client_fd, &lenght, sizeof(size_t)) == -1){		//mando la lunghezza del pathname
 		errno = ECANCELED;
 		return -1;
 	}
