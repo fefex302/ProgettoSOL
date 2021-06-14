@@ -210,8 +210,8 @@ int openFile(const char* pathname, int flags){
 	else 
 		openwrite = 0;
 
-	int lenght = strlen(pathname)+1;
-	if(writen(client_fd, &lenght, sizeof(int)) == -1)		//mando la lunghezza del pathname
+	size_t lenght = strlen(pathname)+1;
+	if(writen(client_fd, &lenght, sizeof(size_t)) == -1)		//mando la lunghezza del pathname
 		return -1;
 
 	if(writen(client_fd, (void * )pathname, lenght) == -1)				//mando il pathname
@@ -263,6 +263,14 @@ int writeFile(const char* pathname, const char*dirname){
 		return -1;
 	free(file_to_send);
 	int answer;
+
+	int stop = 0;
+	while(!stop){
+		if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
+			return -1;
+		if(answer == 0)
+			stop = 1;
+	}
 
 	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
 		return -1;
@@ -350,8 +358,9 @@ int removeFile(const char* pathname){
 		return -1;
 	}
 
-	int lenght = strlen(pathname)+1;
-	if(writen(client_fd, &lenght, sizeof(int)) == -1){		//mando la lunghezza del pathname
+	size_t lenght = strlen(pathname)+1;
+	printf("len %d\n",lenght);
+	if(writen(client_fd,&lenght, sizeof(size_t)) == -1){		//mando la lunghezza del pathname
 		errno = ECANCELED;
 		return -1;
 	}
@@ -361,7 +370,7 @@ int removeFile(const char* pathname){
 	}
 
 	int answer = 1;
-	if(readn(client_fd, &answer, sizeof(answer)) == -1){		//ricevo la risposta dal server che equivale al size del file
+	if(readn(client_fd, &answer, sizeof(answer)) == -1){		//ricevo la risposta dal server 
 		errno = ECANCELED;
 		return -1;
 	}
@@ -371,5 +380,40 @@ int removeFile(const char* pathname){
 	}
 	if(print_flag)
 			printf("la richiesta di rimozione del file <%s> ha avuto successo\n",pathname);
+	return 0;
+}
+
+
+int lockFile(const char* pathname){
+	int request = LO;
+	if(print_flag)
+			printf("richiesta di applicazione della LOCK sul file <%s>\n",pathname);
+
+	if(writen(client_fd, &request, sizeof(request)) == -1){		//mando il tipo di richiesta
+		errno = ECANCELED;
+		return -1;
+	}
+
+	size_t lenght = strlen(pathname)+1;
+	printf("len %d\n",lenght);
+	if(writen(client_fd, &lenght, sizeof(size_t)) == -1){		//mando la lunghezza del pathname
+		errno = ECANCELED;
+		return -1;
+	}
+	if(writen(client_fd, (void * )pathname, lenght) == -1){				//mando il pathname
+		errno = ECANCELED;
+		return -1;
+	}
+
+	int answer = 1;
+	if(readn(client_fd, &answer, sizeof(answer)) == -1){		//ricevo la risposta dal server 
+		return -1;
+	}
+	if(answer == -1){
+		errno = ECANCELED;
+		return -1;
+	}
+	if(print_flag)
+			printf("la richiesta di applicazione della LOCK sul file <%s> ha avuto successo\n",pathname);
 	return 0;
 }
