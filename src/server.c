@@ -98,7 +98,7 @@ int updatemax(fd_set set, int fdmax) {
 
 
 int fifo_insert(fileT *fileToInsert);
-int fifo_remove();
+int fifo_remove(int connfd);
 int fifo_remove_equal(char *pathname);
 int config_file_parser(char *stringa, config_parameters* cfg);
 int config_values_correctly_initialized(config_parameters *cfg);
@@ -740,7 +740,7 @@ int wrt(int connfd, int *error){
 	LOCK(&servermtx);
 	LOCK(&serverstatsmtx);
 	while((configs.MAX_FILE_NUMBER - file_stored) <= 0 || (configs.SERVER_CAPACITY_BYTES - bytes_used) < dim){
-		if((dimfreed = fifo_remove()) == -1){				//il rimpiazzamento può fallire perchè tutti i file o alcuni sono lockati e non posso toglierli
+		if((dimfreed = fifo_remove(connfd)) == -1){				//il rimpiazzamento può fallire perchè tutti i file o alcuni sono lockati e non posso toglierli
 			answer = -1;
 			icl_hash_delete(file_server, tmp->key, NULL, NULL);
 			if(writen(connfd, &answer, sizeof(int)) == -1){
@@ -756,6 +756,15 @@ int wrt(int connfd, int *error){
 		}
 
 	}
+
+	answer = 0; //mando risposta al server dicendo che non ci sono più file rimpiazzati spediti
+	if(writen(connfd, &answer, sizeof(int)) == -1){
+		*error = 1;
+		UNLOCK(&servermtx);
+		UNLOCK(&serverstatsmtx);
+		return -1;
+	}
+
 	UNLOCK(&serverstatsmtx);
 	UNLOCK(&servermtx);
 
@@ -1004,7 +1013,8 @@ int lo(int connfd, int *error){
 		free(pathname);
 		return -1;
 	}
-	printf("%d %d %d\n",tmp->open_create, tmp->open_lock, tmp->user);
+	if(answer == -1)
+		return answer;
 	free(pathname);
 	return answer;
 }
@@ -1030,7 +1040,7 @@ int fifo_insert(fileT *fileToInsert){
 	return 0;
 }
 
-int fifo_remove(){
+int fifo_remove(int connfd){
 	out_put.replace_algo ++;
 	size_t DimFreed = 0;
 	fifoStruct *tmp = NULL;
@@ -1049,6 +1059,15 @@ int fifo_remove(){
 
 			if(fifoqueue == NULL)
 				fifoqueueLast = NULL;
+			
+			if(writen(connfd, &DimFreed, sizeof(size_t)) == -1){			//mando dim del file
+				return -1;
+			}
+
+			if(writen(connfd, curr->fileInServer->data, DimFreed) == -1){			//mando il file
+				return -1;
+			}
+
 			retval = icl_hash_delete(file_server, curr->fileInServer->key, NULL, NULL);
 			free(curr);
 			if(retval == -1){
