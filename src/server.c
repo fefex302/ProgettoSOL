@@ -78,6 +78,12 @@ typedef struct _output{
 	int replace_algo;
 }output_info;
 
+typedef struct _fifo{
+	fileT *fileInServer;
+	struct _fifo *next;
+} fifoStruct;
+
+
 void cleanup() {
     unlink(SOCKNAME);
 }
@@ -91,6 +97,8 @@ int updatemax(fd_set set, int fdmax) {
 }
 
 
+int fifo_insert(fileT *fileToInsert);
+int fifo_remove();
 int config_file_parser(char *stringa, config_parameters* cfg);
 int config_values_correctly_initialized(config_parameters *cfg);
 void *worker_t(void *args);
@@ -107,17 +115,20 @@ static list *last = NULL;				//puntatore all'ultimo elemento della queue
 static int numreq = 0;					//variabile che indica se il buffer delle richieste è vuoto o meno
 volatile sig_atomic_t quit = 0;			//variabile che dice se bisogna uscire dal programma velocemente
 volatile sig_atomic_t stop = 0;			//variabile che dice se bisogna uscire	dal programma finendo prima le richieste ricevute 
-static pthread_mutex_t	bufmtx = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t	servermtx = PTHREAD_MUTEX_INITIALIZER;
 static hashtable *file_server;			//hashtable dove andrò a memorizzare tutti i file
-static pthread_cond_t	bufcond = PTHREAD_COND_INITIALIZER;
 static int pfd[2];
 static fd_set set;
+static pthread_cond_t	bufcond = PTHREAD_COND_INITIALIZER;
+static pthread_mutex_t	bufmtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t	servermtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t	serverstatsmtx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t	filesopenedmtx = PTHREAD_MUTEX_INITIALIZER;
-static long file_slots;
-static long free_bytes;
+static pthread_mutex_t	fifoqueuemtx = PTHREAD_MUTEX_INITIALIZER;
+static long file_stored = 0;
+static long bytes_used = 0;
 static listfiles *filesopened = NULL;
+static fifoStruct *fifoqueue = NULL;
+static fifoStruct *fifoqueueLast = NULL;
 
 void sigterm(int signo) {
     switch(signo){
@@ -189,11 +200,14 @@ int main(int argc,char *argv[]){
 
 	fclose(config_file);
 
-	file_slots = configs.MAX_FILE_NUMBER;
-	free_bytes = configs.SERVER_CAPACITY_MBYTES * 1000000;
-	configs.SERVER_CAPACITY_BYTES = free_bytes;
+	configs.SERVER_CAPACITY_BYTES = configs.SERVER_CAPACITY_MBYTES * 1000000;
+	
 	file_server = icl_hash_create(50, NULL, NULL);
 	pthread_t *tids;
+	out_put.max_file_stored = 0;
+	out_put.max_size_reached = 0;
+	out_put.replace_algo = 0;
+
 	if((tids = malloc(configs.NUM_THREADS * (sizeof(pthread_t)))) == NULL)
 		NULL_EXIT(tids = malloc(configs.NUM_THREADS * (sizeof(pthread_t))),"malloc");
 	//inizializzo i tids a 0
@@ -233,7 +247,7 @@ int main(int argc,char *argv[]){
   	struct timeval select_timeout;	
  
 
-    while(!quit){
+    while(!quit && !stop){
     	select_timeout.tv_usec = 0;
   		select_timeout.tv_sec = 5;
     	tmpset = set;
@@ -252,8 +266,7 @@ int main(int argc,char *argv[]){
 		if(quit)
 			break;
 		if(stop){
-			for(i = 0; i<active_threads; i++)
-				MINUS_ONE_EXIT(insert_node(-1,&last,&requests), "insert node stop");
+			break;
 		}
 
 		printf("qua1\n");
@@ -311,7 +324,7 @@ int main(int argc,char *argv[]){
 			 				fdmax = updatemax(set, fdmax);
 
 			 		LOCK(&bufmtx);
-			 		printf("connfd: %d\n",connfd);
+			 		
 					while ((res = insert_node(connfd,&last,&requests)) < 0 && try < 3)
 						try ++;
 					UNLOCK(&bufmtx);
@@ -330,7 +343,11 @@ int main(int argc,char *argv[]){
     if(stop == 1){
     	for(i = 0; i < active_threads; i ++){
     		if(insert_node(-1, &last, &requests) == -1)
-    			insert_node(-1, &last, &requests);
+    			if(insert_node(-1, &last, &requests) == -1){
+    				exit(1);
+    			}
+    		numreq ++;
+			SIGNAL(&bufcond);
 		}
 	}
     
@@ -344,8 +361,14 @@ int main(int argc,char *argv[]){
 	    printf("thread joinato\n");
     }
     free(tids);
+    fifoStruct *tmp;
+    while(fifoqueue != NULL){
+    	tmp = fifoqueue;
+    	fifoqueue = fifoqueue->next;
+    	free(tmp);
+    }
     icl_hash_destroy(file_server, NULL, NULL);
-    printf("fine\n");
+    printf("replace_algo = %d\n",out_put.replace_algo);
     return 0;
 
 }
@@ -413,7 +436,7 @@ void *worker_t(void *args){
 		int answer = 0;
 		int error = 0;		//in caso una delle chiamate come readn,writen,malloc ecc. fallisca error = 1 e chiudo la connessione
 		int curfd;
-		printf("start\n");
+		//printf("start\n");
 		LOCK(&bufmtx);
 		if(quit){
 				UNLOCK(&bufmtx);
@@ -435,7 +458,7 @@ void *worker_t(void *args){
 			return NULL;
 		}
 		int codreq = -1;//codice richiesta
-		printf("READN\n");
+		//printf("READN\n");
 		if(readn(curfd, &codreq, sizeof(int)) == -1) //non esco in caso di errore, ma chiudo la connessione successivamente
 			codreq = -1;
 
@@ -492,9 +515,8 @@ void *worker_t(void *args){
 				UNLOCK(&servermtx);
 				UNLOCK(&filesopenedmtx);
 
-				printf("READN\n");
 				writen(curfd, &answer, sizeof(int));	//se fallisco non esco tanto non cambia niente per il server
-				printf("READN\n");
+				
 				close(curfd);
 				break;
 
@@ -549,7 +571,9 @@ fileT* opn(int flag, int connfd, int *error){
         	*error = 1;
         	return NULL;
         }
-        
+
+        memset(path,'\0',dimpath);
+
         n = readn(connfd, path, dimpath);						//leggo il nome
         if (n<=0){
         	*error = 1;
@@ -583,7 +607,11 @@ fileT* opn(int flag, int connfd, int *error){
 	    				}
 	    				UNLOCK(&tmp->filemtx);
 	    			}
-  
+
+	    			LOCK(&serverstatsmtx);
+	    			file_stored ++;
+  					UNLOCK(&serverstatsmtx);
+
     				if(answer != -1){
 	    				LOCK(&filesopenedmtx);
 	    				insert_listfiles(connfd, &tmp, &filesopened);
@@ -675,7 +703,6 @@ int wrt(int connfd, int *error){
 		*error = 1;
 		return -1;
 	}
-
 	LOCK(&tmp->filemtx);
 	if(readn(connfd, &dim, sizeof(size_t)) == -1){
 		*error = 1;
@@ -689,44 +716,85 @@ int wrt(int connfd, int *error){
 		return -1;
 	}
 
+	memset(contenuto,'\0',dim);
+
 	if(readn(connfd, contenuto, dim)== -1){
 		*error = 1;
 		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
 
+	//controllo che il file abbia dimensione minore della dimensione massima del server, se così non fosse allora non lo memorizzo e invio risposta negativa al client
 	if(dim >= configs.SERVER_CAPACITY_BYTES){
-		
 		answer = -1;
+		icl_hash_delete(file_server, tmp->key, NULL, NULL);
+		UNLOCK(&servermtx);
+		LOCK(&serverstatsmtx);
+		file_stored --;
+		UNLOCK(&serverstatsmtx);
+		if(writen(connfd, &answer, sizeof(int)) == -1){
+			*error = 1;
+			return -1;
+		}
 	}
+	size_t dimfreed;
+	//se non ho spazio a sufficienza nel server allora applico il rimpiazzamento
+	LOCK(&servermtx);
+	LOCK(&serverstatsmtx);
+	printf("FILE STORED%d\n",file_stored);
+	while((configs.MAX_FILE_NUMBER - file_stored) <= 0 || (configs.SERVER_CAPACITY_BYTES - bytes_used) < dim){
+		if((dimfreed = fifo_remove()) == -1){				//il rimpiazzamento può fallire perchè tutti i file o alcuni sono lockati e non posso toglierli
+			answer = -1;
+			icl_hash_delete(file_server, tmp->key, NULL, NULL);
+			UNLOCK(&servermtx);
+			LOCK(&serverstatsmtx);
+			file_stored --;
+			UNLOCK(&serverstatsmtx);
+			if(writen(connfd, &answer, sizeof(int)) == -1){
+				*error = 1;
+				return -1;
+			}
+		}
+		else{
+			file_stored --;
+			bytes_used = bytes_used - dimfreed; 
+			out_put.replace_algo ++;
+		}
 
-	//if(file_slots == 0){
-		//fifo_replace(-1);
-	//}
+	}
+	UNLOCK(&serverstatsmtx);
+	UNLOCK(&servermtx);
+
+	fifo_insert(tmp);
+	
 	char *path = tmp->key;
 
+	//aggiungo la size e il contenuto del file nel server
 	if(answer != -1){
-		printf("path: %s\n",path);
 	   	if(tmp->open_lock == 1 && tmp->open_create == 1){
-	    	//if(dim > free_bytes)
-	    		//answer = fifo_replace(dim);
 	    	if(answer != -1){
 	    		tmp->size = dim;
 	    		tmp->data = contenuto;
 	    	}
 	    }
 	}
-	//printf("answer: %d\n",answer);
+
+	//aggiorno le stats del server
 	LOCK(&serverstatsmtx);
-	file_slots--;
-	free_bytes = free_bytes - (long)dim;
+	file_stored ++;
+	bytes_used = bytes_used + dim;
+	bytes_used = bytes_used + (long)dim;
+	if((bytes_used + dim) > out_put.max_size_reached)
+		out_put.max_size_reached = bytes_used + dim;
 	UNLOCK(&serverstatsmtx);
-	printf("esco\n");
+
+	//mando risposta al client
 	if(writen(connfd, &answer, sizeof(int)) == -1){
 		*error = 1;
 		return -1;
 	}
 	UNLOCK(&tmp->filemtx);
+	//chiudo il file una volta che ci ho scritto
 	if(cls(connfd,tmp->key) == -1){
 		*error = 1;
 		return -1;
@@ -752,6 +820,8 @@ int rm(int connfd, int *error){
 		return -1;
 	}
 
+	memset(pathname,'\0',dim);
+
 	if(readn(connfd, pathname, dim)==-1){
 		*error = 1;
 		return -1;
@@ -772,6 +842,10 @@ int rm(int connfd, int *error){
 			answer = -1;
 	UNLOCK(&servermtx);
 
+	LOCK(&filesopenedmtx);
+	remove_if_equalpath(pathname, &filesopened);
+	UNLOCK(&filesopenedmtx);
+
 	if(writen(connfd, &answer, sizeof(int)) == -1){
 		*error = 1;
 		return -1;
@@ -779,7 +853,6 @@ int rm(int connfd, int *error){
 	return answer;
 }
 
-//int fifo_replace
 
 int cls(int connfd,char* pathname){
 	int answer = 0;
@@ -791,6 +864,10 @@ int cls(int connfd,char* pathname){
 			UNLOCK(&servermtx);
 			tmp->open_create = 0;
 			tmp->open_lock = 0;
+			LOCK(&filesopenedmtx);
+			if(remove_if_equalpath(pathname, &filesopened) == NULL)
+				answer = -1;
+			UNLOCK(&filesopenedmtx);
 			UNLOCK(&tmp->filemtx);
 		}
 	}
@@ -799,10 +876,6 @@ int cls(int connfd,char* pathname){
 		answer = -1;
 	}
 
-	LOCK(&filesopenedmtx);
-	if(remove_if_equalpath(pathname, &filesopened) == NULL)
-		answer = -1;
-	UNLOCK(&filesopenedmtx);
 	return answer;
 }
 
@@ -821,6 +894,8 @@ int rd(int connfd, int *error){
 		return -1;
 	}
 
+	memset(pathname,'\0',dim);
+
 	if(readn(connfd, pathname, dim) == -1){			//leggo pathname
 		*error = 1;
 		return -1;
@@ -832,8 +907,14 @@ int rd(int connfd, int *error){
 		UNLOCK(&servermtx);
 	}
 	else{
-		LOCK(&tmp->filemtx);
-		UNLOCK(&servermtx);
+		if(tmp->open_create){	//non posso leggerlo perchè il file è in fase di scrittura
+			answer = -1;
+			UNLOCK(&servermtx);
+		}
+		else{
+			LOCK(&tmp->filemtx);
+			UNLOCK(&servermtx);
+		}
 	}
 
 	free(pathname);
@@ -864,3 +945,56 @@ int rd(int connfd, int *error){
 	return answer;
 
 }
+
+int fifo_insert(fileT *fileToInsert){
+	LOCK(&fifoqueuemtx);
+	fifoStruct *new = malloc(sizeof(fifoStruct));
+	if(!new){
+		perror("malloc");
+		return -1;
+	}
+	new->fileInServer = fileToInsert;
+	new->next = NULL;
+	if(fifoqueueLast == NULL){
+		fifoqueueLast = new;
+		fifoqueue = new;
+		UNLOCK(&fifoqueuemtx);
+		return 0;
+	}
+	fifoqueueLast->next = new;
+	fifoqueueLast = new;
+	UNLOCK(&fifoqueuemtx);
+	return 0;
+}
+
+int fifo_remove(){
+	size_t DimFreed = 0;
+	fifoStruct *tmp = NULL;
+	fifoStruct *curr = fifoqueue;
+	int retval = 0;
+	LOCK(&fifoqueuemtx);
+	while(curr != NULL ){
+		if(curr->fileInServer->open_lock == 0 && curr->fileInServer->open_create == 0){
+			LOCK(&fifoqueue->fileInServer->filemtx);
+			DimFreed = curr->fileInServer->size;
+			if(tmp != NULL){
+				tmp->next = curr->next;
+			}
+			else
+				fifoqueue = fifoqueue->next;
+			retval = icl_hash_delete(file_server, curr->fileInServer->key, NULL, NULL);
+			free(curr);
+			if(retval == -1){
+				UNLOCK(&fifoqueue->fileInServer->filemtx);
+				UNLOCK(&fifoqueuemtx);
+				return -1;
+			}
+			break;
+		}
+		tmp = curr;
+		curr = curr->next;
+	}
+	UNLOCK(&fifoqueuemtx);
+	return DimFreed;
+}
+
