@@ -17,7 +17,7 @@ TARGETS		= $(OBJ)server \
 				$(OBJ)client
 
 
-.PHONY: all clean cleanall
+.PHONY: all clean cleanall test1
 .SUFFIXES: .c .h
 
 
@@ -45,4 +45,7 @@ $(OBJ)api.o: $(SRC)api.c
 clean		: 
 	rm -f $(TARGETS)
 cleanall	: clean
-	\rm -f *.o *~ *.a ./mysock
+	\ rm -f ./bin/*.o *~ *.a ./sock
+
+test1	:
+	valgrind --leak-check=full ./bin/server config.txt & bash ./scripts/test1.sh; kill -1 $$!
