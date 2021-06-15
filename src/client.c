@@ -50,9 +50,11 @@ int disconnect(char *args);
 int W_req(char *args,char *dirname);
 int r_req(char *args,char *dirname);
 int w_parse(char *args, char *wdirname, long *nFileToSend);
+int R_parse(char *args, long *nFileToRead);
 int w_req( const char* nomedir, long* n );
 int c_req(char *args);
 int l_req(char* args);
+int R_req(int N, char *dirname);
 
 typedef struct _arg_list{
     char* arg;
@@ -188,7 +190,7 @@ int main(int argc,char* argv[]){
 			case ':': 
 				switch(optopt){
 					case 'R':
-						printf("ciaoooooo\n");
+						R_req(-1, read_dirname);
 						break;
 					case 't':
 						printf("t senza argomenti\n");
@@ -243,6 +245,20 @@ int parse_arguments(char *buf,char *buf2[]){
     return n;
 }
 
+int R_parse(char *args, long *nFileToRead){
+	if(args[0] == 'n'){
+		if(args[1] == '='){
+			if(isNumber(args+2, nFileToRead) != 0)
+				return -1;
+		}
+		else 
+			return -1;
+	}
+	else
+		return -1;
+	return 0;
+}
+
 int w_parse(char *args, char *wdirname, long *nFileToSend){
 	int i = 0;
 	while(args[i] != '\0' && args[i] != ',')
@@ -252,7 +268,7 @@ int w_parse(char *args, char *wdirname, long *nFileToSend){
 		printf("DIRNAME %s\n",wdirname);
 		char aux[11];
 		memset(aux,'\0',11);
-		strncpy(aux, args+i, 11);
+		strncpy(aux, args+i+1, 11);
 		printf("AUX %s\n",aux);
 		if(aux[0] != 'n' && aux[1]!= '=')
 			return -1;
@@ -429,7 +445,9 @@ int r_req(char *args,char *dirname){				//args lista di file da leggere separati
 	char *token = strtok_r(args, ",", &tmpstr);
 	void *buf = NULL;
 	size_t filesize = -1;
-	int len = strlen(dirname) + 1;
+	int len = 0;
+	if(dirname != NULL)
+		len = strlen(dirname) + 1;
 	int n = 0;
 	while (token) {
 
@@ -482,6 +500,7 @@ int r_req(char *args,char *dirname){				//args lista di file da leggere separati
 					printf("richiesta di scrittura del file <%s> su disco è fallita\n",token);
 				token = strtok_r(NULL, ",", &tmpstr);
 				free(dirfile);
+				close(fd_file);
 				free(buf);
 				continue;
 			}
@@ -535,4 +554,31 @@ int l_req(char* args){
     }
    
     return 0;
+}
+
+int R_req(int N, char *dirname){
+
+	if(print_flag){
+		if(N > 0)
+			printf("richiesta di lettura di %d file qualsiasi\n",N);
+		else
+			printf("richiesta di lettura di tutti i file del server\n");
+	}
+	if(readNFiles(N, dirname) == 0){
+		if(print_flag){
+		if(N > 0)
+			printf("richiesta di lettura di %d file qualsiasi ha avuto successo\n",N);
+		else
+			printf("richiesta di lettura di tutti i file del server ha avuto successo\n");
+		}
+	}
+	else {
+		if(print_flag){
+		if(N > 0)
+			printf("richiesta di lettura di %d file qualsiasi è fallita\n",N);
+		else
+			printf("richiesta di lettura di tutti i file del server è fallita\n");
+	}
+	}
+	return 0;
 }
