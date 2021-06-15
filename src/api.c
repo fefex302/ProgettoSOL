@@ -151,8 +151,10 @@ int closeConnection( const char* sockname ){
 
     if(strncmp(server_address.sun_path, sockname, strlen(sockname)+1) ==  0){
     	int req = CLOSE;
+
     	if(writen(client_fd, &req, sizeof(int)) == -1)
     		return -1;
+
     	if(readn(client_fd, &req, sizeof(int)) == -1)
     		return -1;
         return close(client_fd);
@@ -253,6 +255,7 @@ int writeFile(const char* pathname, const char*dirname){
 		if(print_flag)
 			printf("richiesta di apertura in modalità creazione e lock del file <%s> fallita\n",pathname);
 		errno = ECANCELED;
+		free(file_to_send);
 		return -1;
 	}
 
@@ -416,4 +419,88 @@ int lockFile(const char* pathname){
 	if(print_flag)
 			printf("la richiesta di applicazione della LOCK sul file <%s> ha avuto successo\n",pathname);
 	return 0;
+}
+
+
+int readNFiles(int N, const char* dirname){
+	int request = RDN;
+
+	if(writen(client_fd, &request, sizeof(request)) == -1){		//mando il tipo di richiesta
+		errno = ECANCELED;
+		return -1;
+	}
+	int numerofiles = N;
+
+	if(writen(client_fd, &numerofiles, sizeof(numerofiles)) == -1){		//mando il numero di file qualsiasi da leggere
+		errno = ECANCELED;
+		return -1;
+	}
+	int n = 0;
+	char *file_to_read = NULL;
+
+	int len;
+	if(dirname != NULL)
+		len = strlen(dirname) + 1;
+
+	size_t dimfile = 0;
+	while(dimfile > 0){
+		if(readn(client_fd, &dimfile, sizeof(size_t)) == -1){		//ricevo la size del file dal server
+			errno = ECANCELED;
+			return -1;
+		}
+		if(dimfile > 0){
+			file_to_read = malloc(dimfile);
+			memset(file_to_read, '\0', dimfile);
+
+			if(readn(client_fd, file_to_read, dimfile) == -1){		//ricevo il file dal server
+				errno = ECANCELED;
+				return -1;
+			}
+			if(dirname != NULL){
+				int fd_file;
+				char str[10];
+				char namefile[40] = {'f','i','l','e'};
+				if(sprintf(str, "%d", n) <0){
+					free(file_to_read);
+					continue;
+				}
+
+				strncat(namefile,str,strlen(str));
+
+				char* dirfile = malloc(len+strlen(namefile));
+				if(!dirfile){
+					free(file_to_read);
+					free(dirfile);
+					continue;
+				}
+				memset(dirfile,'\0',len);
+
+				strncpy(dirfile,dirname,len);
+
+				strncat(dirfile, namefile, strlen(namefile));
+				n++;
+
+				if((fd_file = open(dirfile, O_CREAT|O_WRONLY, 0666)) == -1){
+					perror("open");
+					free(dirfile);
+					free(file_to_read);
+					continue;
+				}
+
+				if(writen(fd_file, file_to_read, dimfile) == -1){
+					perror("writen");
+					free(dirfile);
+					close(fd_file);
+					free(file_to_read);
+					continue;
+				}	
+				close(fd_file);
+				free(dirfile);
+				free(file_to_read);
+			}
+		}
+	}
+
+	return 0;
+
 }
