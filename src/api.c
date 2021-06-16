@@ -248,9 +248,10 @@ int writeFile(const char* pathname, const char*dirname){
 		return -1;
 	}
 
-	if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
+	if(writen(client_fd, &request, sizeof(request)) == -1){		//mando il tipo di richiesta
+		errno = ECANCELED;
 		return -1;
-
+	}
 	if((retval = openFile(pathname,O_LOCK_CREATE)) == -1){
 		if(print_flag)
 			printf("richiesta di apertura in modalità creazione e lock del file <%s> fallita\n",pathname);
@@ -259,25 +260,49 @@ int writeFile(const char* pathname, const char*dirname){
 		return -1;
 	}
 
-	if(writen(client_fd, &size, sizeof(size)) == -1)			//mando la lunghezza del file
+	if(writen(client_fd, &size, sizeof(size)) == -1){			//mando la lunghezza del file
+		errno = ECANCELED;
 		return -1;
-
-	if(writen(client_fd, file_to_send, size) == -1)				//mando il file
-		return -1;
-	free(file_to_send);
-	int answer;
-
-	int stop = 0;
-	while(!stop){
-		if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
-			return -1;
-		if(answer == 0)
-			stop = 1;
 	}
 
-	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
+	printf("QUA1\n");
+	
+	if(writen(client_fd, file_to_send, size) == -1){
+		errno = ECANCELED;										//mando il file
 		return -1;
+	}
+	printf("QUA2\n");
+	free(file_to_send);
+	size_t answer;
+	char *fileRimpiazzato = NULL;
+	int stop = 0;
+	while(!stop){
+		if(readn(client_fd, &answer, sizeof(answer)) == -1){		//ricevo la risposta dal server, che se = 0 significa che non ho più file rimpiazzati ricevuti
+			errno = ECANCELED;
+			return -1;
+		}
+		printf("dim recev %zu\n", answer);
+		if(answer == 0 || answer == -1){
+			stop = 1;
+			break;
+		}
 
+		fileRimpiazzato = malloc(answer);
+		if(!fileRimpiazzato)
+			continue;
+		if(readn(client_fd, fileRimpiazzato, answer) == -1){		
+			errno = ECANCELED;
+			return -1;
+		}
+
+		free(fileRimpiazzato);
+	}
+	printf("QUA3\n");
+	if(readn(client_fd, &answer, sizeof(int)) == -1){		//ricevo la risposta dal server
+		errno = ECANCELED;
+		return -1;
+	}
+	printf("QUA4\n");
 	if(answer == -1){
 		if(print_flag)
 			printf("la richiesta di scrittura del file <%s> è fallita\n",pathname);
@@ -289,9 +314,6 @@ int writeFile(const char* pathname, const char*dirname){
 	//rimpiazzati nel server per fare spazio al file spedito, che può essere un numero che
 	//va da 0 in poi, quindi ciclerò un numero di volte pari al valore di risposta e memorizzerò
 	//i file nella cartella indicata se questa è diversa da NULL
-	if(dirname != NULL){			
-		printf("ancora da fare\n");
-	}
 
 	if(print_flag){
 		printf("la richiesta di scrittura del file <%s> ha avuto successo\n",pathname);
@@ -424,9 +446,10 @@ int lockFile(const char* pathname){
 
 int readNFiles(int N, const char* dirname){
 	int request = RDN;
-
+	printf("sono qua 1\n");
 	if(writen(client_fd, &request, sizeof(request)) == -1){		//mando il tipo di richiesta
 		errno = ECANCELED;
+		printf("sono qua 1\n");
 		return -1;
 	}
 	int numerofiles = N;
@@ -442,7 +465,7 @@ int readNFiles(int N, const char* dirname){
 	if(dirname != NULL)
 		len = strlen(dirname) + 1;
 
-	size_t dimfile = 0;
+	size_t dimfile = 1;
 	while(dimfile > 0){
 		if(readn(client_fd, &dimfile, sizeof(size_t)) == -1){		//ricevo la size del file dal server
 			errno = ECANCELED;
