@@ -57,7 +57,7 @@ static int client_fd;
 static int connection_active = 0;
 static struct sockaddr_un server_address;
 int print_flag = 0;
-
+static int number = 0;
 //*************************************FUNZIONI STATICHE DI UTILITÀ***************************************************************
 static char* read_file(int fd_file,const char *file_path, size_t *size){		//legge un file e restituisce nel campo file_return 
 																				//una stringa contenente tutti i bit del file
@@ -81,20 +81,49 @@ static char* read_file(int fd_file,const char *file_path, size_t *size){		//legg
 }
 
 
-static int open_file(const char *file_to_read,char *path_to_dir){		//legge il file contenuto nella stringa e se una cartella
-	if(path_to_dir == NULL)									//di salvataggio è settata allora crea un file in quella cartella
-		return 0;		
-
-	size_t size = strlen(file_to_read);
-
+static int save_file(const char *fileToStore,char *dirname, size_t filesize){		//legge il file contenuto nella stringa e se una cartella
+	if(dirname == NULL)												//di salvataggio è settata allora crea un file in quella cartella
+		return 0;
+	int len = strlen(dirname) + 1;		
 	int fd_file;
-
-	if((fd_file = open(path_to_dir, O_CREAT|O_WRONLY, 0666)) == -1)
+	char str[10];
+			
+	char namefile[40] = {'f','i','l','e','E','s','p'};
+	if(sprintf(str, "%d", number) <0){
 		return -1;
+	}
 
-	return writen(fd_file,(void * )file_to_read,size);
+	strncat(namefile,str,strlen(str));
 
-}
+	char* dirfile = malloc(len+strlen(namefile));
+	if(!dirfile){
+		free(dirfile);
+		return -1;
+	}
+	memset(dirfile,'\0',len);
+
+	strncpy(dirfile,dirname,len);
+
+	strncat(dirfile, namefile, strlen(namefile));
+		
+
+	if((fd_file = open(dirfile, O_CREAT|O_WRONLY, 0666)) == -1){
+		perror("open");
+		free(dirfile);
+		return -1;
+	}
+
+	if(writen(fd_file, fileToStore, filesize) == -1){
+		perror("writen");
+		free(dirfile);
+		close(fd_file);
+		return -1;
+	}
+	close(fd_file);
+	free(dirfile);	
+	return 0;
+	}
+
 //*************************************FUNZIONI DELL'API********************************************************************************
 
 
@@ -262,6 +291,7 @@ int writeFile(const char* pathname, const char*dirname){
 
 	if(writen(client_fd, &size, sizeof(size)) == -1){			//mando la lunghezza del file
 		errno = ECANCELED;
+		free(file_to_send);
 		return -1;
 	}
 
@@ -269,6 +299,7 @@ int writeFile(const char* pathname, const char*dirname){
 	
 	if(writen(client_fd, file_to_send, size) == -1){
 		errno = ECANCELED;										//mando il file
+		free(file_to_send);
 		return -1;
 	}
 	printf("QUA2\n");
@@ -276,6 +307,7 @@ int writeFile(const char* pathname, const char*dirname){
 	size_t answer;
 	char *fileRimpiazzato = NULL;
 	int stop = 0;
+	
 	while(!stop){
 		if(readn(client_fd, &answer, sizeof(answer)) == -1){		//ricevo la risposta dal server, che se = 0 significa che non ho più file rimpiazzati ricevuti
 			errno = ECANCELED;
@@ -289,16 +321,18 @@ int writeFile(const char* pathname, const char*dirname){
 
 		fileRimpiazzato = malloc(answer);
 		if(!fileRimpiazzato)
-			continue;
+			return -1;
 		if(readn(client_fd, fileRimpiazzato, answer) == -1){		
 			errno = ECANCELED;
 			return -1;
 		}
 
+		save_file(fileRimpiazzato, dirname, answer);
 		free(fileRimpiazzato);
+		number++;
 	}
 	printf("QUA3\n");
-	if(readn(client_fd, &answer, sizeof(int)) == -1){		//ricevo la risposta dal server
+	if(readn(client_fd, &answer, sizeof(size_t)) == -1){		//ricevo la risposta dal server
 		errno = ECANCELED;
 		return -1;
 	}
@@ -461,7 +495,7 @@ int readNFiles(int N, const char* dirname){
 	int n = 0;
 	char *file_to_read = NULL;
 
-	int len;
+	int len = 0;
 	if(dirname != NULL)
 		len = strlen(dirname) + 1;
 
@@ -527,3 +561,76 @@ int readNFiles(int N, const char* dirname){
 	return 0;
 
 }
+/*
+int appendToFile(const char* pathname, void* buf, size_t size, const char* dirname){
+	int request = APP;
+	int answer = 0;
+	size_t answer2 = 0;
+
+	if(writen(client_fd, &request, sizeof(request)) == -1){		//mando il tipo di richiesta
+		errno = ECANCELED;
+		return -1;
+	}
+
+	size_t lenght = strlen(pathname)+1;
+
+	if(writen(client_fd, &lenght, sizeof(size_t)) == -1){		//mando la lunghezza del pathname
+		errno = ECANCELED;
+		return -1;
+	}
+
+	if(writen(client_fd, (void * )pathname, lenght) == -1){				//mando il pathname
+		errno = ECANCELED;
+		return -1;
+	}
+
+	if(readn(client_fd, &answer, sizeof(int)) == -1){				//leggo la risposta 
+		errno = ECANCELED;
+		return -1;
+	}
+
+	if(answer != 0){
+		if(print_flag)
+			printf("non è stato possibile aprire il file <%s>, il file non esiste o non può essere modificato, richiesta di append fallita\n",pathname);
+		errno = ECANCELED;
+		return -1;
+	}
+
+	if(writen(client_fd, &size, sizeof(size_t)) == -1){				//mando il size dell'append
+		errno = ECANCELED;
+		return -1;
+	}
+
+	if(writen(client_fd, buf, size) == -1){								//mando l'append								
+		errno = ECANCELED;
+		return -1;
+	}
+
+
+	char *fileRimpiazzato = NULL;
+	int stop = 0;
+	while(!stop){
+		if(readn(client_fd, &answer2, sizeof(size_t)) == -1){		//ricevo la risposta dal server, che se = 0 significa che non ho più file rimpiazzati ricevuti
+			errno = ECANCELED;
+			return -1;
+		}
+		printf("dim ricev %zu\n", answer);
+		if(answer == 0 || answer == -1){
+			stop = 1;
+			break;
+		}
+
+		fileRimpiazzato = malloc(answer);
+		if(!fileRimpiazzato)
+			continue;
+		if(readn(client_fd, fileRimpiazzato, answer) == -1){		
+			errno = ECANCELED;
+			return -1;
+		}
+
+		free(fileRimpiazzato);
+	}
+
+
+}*/
+
