@@ -308,6 +308,10 @@ int writeFile(const char* pathname, const char*dirname){
 	char *fileRimpiazzato = NULL;
 	int stop = 0;
 	
+	//protocollo di risposta del server: se va tutto bene ritorno la size dei file
+	//rimpiazzati nel server per fare spazio al file spedito, che può essere un numero che
+	//va da 1 in poi, quindi ciclerò finchè non leggo un valore 0 o -1(per l'errore) e memorizzerò
+	//i file nella cartella indicata se questa è diversa da NULL
 	while(!stop){
 		if(readn(client_fd, &answer, sizeof(answer)) == -1){		//ricevo la risposta dal server, che se = 0 significa che non ho più file rimpiazzati ricevuti
 			errno = ECANCELED;
@@ -327,6 +331,7 @@ int writeFile(const char* pathname, const char*dirname){
 			return -1;
 		}
 
+		//funzione che salva il file nella cartella dirname
 		save_file(fileRimpiazzato, dirname, answer);
 		free(fileRimpiazzato);
 		number++;
@@ -344,10 +349,6 @@ int writeFile(const char* pathname, const char*dirname){
 		return -1;
 	}
 
-	//protocollo di risposta del server: se va tutto bene ritorno il numero di file
-	//rimpiazzati nel server per fare spazio al file spedito, che può essere un numero che
-	//va da 0 in poi, quindi ciclerò un numero di volte pari al valore di risposta e memorizzerò
-	//i file nella cartella indicata se questa è diversa da NULL
 
 	if(print_flag){
 		printf("la richiesta di scrittura del file <%s> ha avuto successo\n",pathname);
@@ -561,7 +562,7 @@ int readNFiles(int N, const char* dirname){
 	return 0;
 
 }
-/*
+
 int appendToFile(const char* pathname, void* buf, size_t size, const char* dirname){
 	int request = APP;
 	int answer = 0;
@@ -584,7 +585,7 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
 		return -1;
 	}
 
-	if(readn(client_fd, &answer, sizeof(int)) == -1){				//leggo la risposta 
+	if(readn(client_fd, &answer, sizeof(int)) == -1){				//leggo la risposta, sarà 0 se il file è stato aperto in modalìtà create
 		errno = ECANCELED;
 		return -1;
 	}
@@ -621,16 +622,36 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
 		}
 
 		fileRimpiazzato = malloc(answer);
-		if(!fileRimpiazzato)
-			continue;
+		if(!fileRimpiazzato){
+			errno = ENOMEM;
+			return -1;
+		}
 		if(readn(client_fd, fileRimpiazzato, answer) == -1){		
 			errno = ECANCELED;
 			return -1;
 		}
 
+		save_file(fileRimpiazzato, dirname, answer);
+
 		free(fileRimpiazzato);
+		number ++;
 	}
 
+	if(readn(client_fd, answer, sizeof(int)) == -1){		//ricevo la risposta dell'esito dell'append
+			errno = ECANCELED;
+			return -1;
+	}
 
-}*/
+	if(answer == 0){
+		if(print_flag)
+			printf("la richiesta di append per il file <%s> ha avuto successo\n",pathname);
+	}
+	else{
+		if(print_flag)
+			printf("la richiesta di append per il file <%s> è fallita\n",pathname);
+	}
+
+	return answer;
+
+}
 
