@@ -55,6 +55,7 @@ int w_req( const char* nomedir, long* n );
 int c_req(char *args);
 int l_req(char* args);
 int R_req(long N, char *dirname);
+char *replaceDirname = NULL;
 
 typedef struct _arg_list{
     char* arg;
@@ -82,7 +83,7 @@ int main(int argc,char* argv[]){
 	char *sockname = NULL;
 	char *read_dirname = NULL;	//cartella dove memorizzare i file letti dal server	
 	char *dirname = NULL;
-	int d=0,r=0,R=0,h=0,f=0,p=0;
+	int d=0,r=0,R=0,h=0,f=0,p=0,D=0,W=0,w=0;
 
 	for(int i = 1; i<argc; i++){
 		if(strncmp(argv[i],"-d",3) == 0){
@@ -99,6 +100,12 @@ int main(int argc,char* argv[]){
 			f = i;
 		else if(strcmp(argv[i],"-p") == 0)
 			p = i;
+		else if(strcmp(argv[i],"-D") == 0)
+			D = i;
+		else if(strcmp(argv[i],"-w") == 0)
+			w = i;
+		else if(strcmp(argv[i],"-W") == 0)
+			W = i;
 	}
 	if(h > 0){
 		help();
@@ -134,6 +141,21 @@ int main(int argc,char* argv[]){
 		}
 		else{
 			printf("-d ha bisogno di almeno uno tra -r o -R\n");
+			end = 1;
+		}
+	}
+
+	if(D>0){
+		if(w>0){
+			D++;
+			replaceDirname = argv[D];
+		}
+		else if(W>0){
+			D++;
+			replaceDirname = argv[D];
+		}
+		else{
+			printf("-D ha bisogno di almeno uno tra -w o -W\n");
 			end = 1;
 		}
 	}
@@ -178,6 +200,8 @@ int main(int argc,char* argv[]){
 				}
 				break;
 			case 'd': 
+				break;
+			case '-D': 
 				break;
 			case 't':  
 				isNumber(optarg, (long *)&timetosleep);
@@ -430,7 +454,7 @@ int W_req(char *args,char *dirname){				//args lista di file da scrivere separat
 			continue;
 		}
 
-		if(writeFile(resolvedpath,dirname) != 0){		
+		if(writeFile(resolvedpath,replaceDirname) != 0){		
 			if(print_flag)
 				printf("richiesta di scrittura del file <%s> è fallita\n",token);
 		}
