@@ -52,6 +52,7 @@
     	pthread_exit((void*)EXIT_FAILURE);			    \
   }}   
 
+
 #define WAIT(c,l)    if (pthread_cond_wait(c,l)!=0)       { \
   if (pthread_cond_wait(c,l)!=0)       {	\
    		fprintf(stderr, "ERRORE FATALE wait\n");		    \
