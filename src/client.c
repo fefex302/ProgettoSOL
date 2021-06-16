@@ -54,7 +54,7 @@ int R_parse(char *args, long *nFileToRead);
 int w_req( const char* nomedir, long* n );
 int c_req(char *args);
 int l_req(char* args);
-int R_req(int N, char *dirname);
+int R_req(long N, char *dirname);
 
 typedef struct _arg_list{
     char* arg;
@@ -145,6 +145,7 @@ int main(int argc,char* argv[]){
 		
 	opterr = 0;
 	long nFileToSend = -1;
+	long nFileToRead = -1;
 	char wdirname[MAX_FILE_NAME];
 	memset(wdirname,'\0',MAX_FILE_NAME);
 
@@ -169,7 +170,12 @@ int main(int argc,char* argv[]){
 				r_req(optarg,read_dirname);
 				break;
 			case 'R': 
-				printf("R con argomenti\n");
+				if(R_parse(optarg, &nFileToRead) == 0){
+					R_req(nFileToRead, read_dirname);
+				}
+				else {
+					printf("-R: errore nel parsing degli argomenti\n");
+				}
 				break;
 			case 'd': 
 				break;
@@ -314,7 +320,7 @@ int w_req( const char* nomedir, long* n ){
             strncpy(filename, nomedir, MAX_FILE_NAME-1);
             strncat(filename, "/", MAX_FILE_NAME-1);
             strncat(filename, file->d_name, MAX_FILE_NAME-1);
-fprintf(stdout, "Nome del file che sto esaminando: '%s'\n", filename);
+	fprintf(stdout, "Nome del file che sto esaminando: '%s'\n", filename);
             if(stat(filename, &statbuf)==-1) {
               perror("eseguendo la stat");
               fprintf(stderr, "ERROR: Error in file %s\n", filename);
@@ -323,7 +329,7 @@ fprintf(stdout, "Nome del file che sto esaminando: '%s'\n", filename);
 
             if(S_ISDIR(statbuf.st_mode)){
                       if ( !isdot(filename) ){
-fprintf(stdout, "L'elemento che sto per visitare è una directory di nome '%s'\n", filename);
+	fprintf(stdout, "L'elemento che sto per visitare è una directory di nome '%s'\n", filename);
                           int res = w_req(filename,n);
                           if(res == -1) return -1;
                       }
@@ -556,29 +562,29 @@ int l_req(char* args){
     return 0;
 }
 
-int R_req(int N, char *dirname){
+int R_req(long N, char *dirname){
 
 	if(print_flag){
 		if(N > 0)
-			printf("richiesta di lettura di %d file qualsiasi\n",N);
+			printf("richiesta di lettura di %li file qualsiasi\n",N);
 		else
 			printf("richiesta di lettura di tutti i file del server\n");
 	}
-	if(readNFiles(N, dirname) == 0){
+	if(readNFiles((int)N, dirname) == 0){
 		if(print_flag){
-		if(N > 0)
-			printf("richiesta di lettura di %d file qualsiasi ha avuto successo\n",N);
-		else
-			printf("richiesta di lettura di tutti i file del server ha avuto successo\n");
+			if(N > 0)
+				printf("richiesta di lettura di %li file qualsiasi ha avuto successo\n",N);
+			else
+				printf("richiesta di lettura di tutti i file del server ha avuto successo\n");
 		}
 	}
 	else {
 		if(print_flag){
-		if(N > 0)
-			printf("richiesta di lettura di %d file qualsiasi è fallita\n",N);
-		else
-			printf("richiesta di lettura di tutti i file del server è fallita\n");
-	}
+			if(N > 0)
+				printf("richiesta di lettura di %li file qualsiasi è fallita\n",N);
+			else
+				printf("richiesta di lettura di tutti i file del server è fallita\n");
+		}
 	}
 	return 0;
 }
