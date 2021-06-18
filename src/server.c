@@ -52,7 +52,6 @@
     	pthread_exit((void*)EXIT_FAILURE);			    \
   }}   
 
-
 #define WAIT(c,l)    if (pthread_cond_wait(c,l)!=0)       { \
   if (pthread_cond_wait(c,l)!=0)       {	\
    		fprintf(stderr, "ERRORE FATALE wait\n");		    \
@@ -111,6 +110,7 @@ int rm(int connfd, int *error);
 int rd(int connfd, int *error);
 int lo(int connfd, int *error);
 int rdn(int connfd, int *error);
+int app(int connfd, int *error);
 //***********************************VARIABILI GLOBALI*************************************************************
 static output_info out_put;				//dati da stampare a schermo all'uscita del programma
 static config_parameters configs;		//parametri di configurazione passati dal file config.txt
@@ -506,10 +506,10 @@ void *worker_t(void *args){
 				break;	
 
 			case APP:
+				app(curfd, &error);
 				break;	
 
 			case LO:
-				printf("answer \n");
 				lo(curfd, &error);
 				break; 	
 
@@ -520,7 +520,6 @@ void *worker_t(void *args){
 				break;
 
 			case RM:
-			printf("answer \n");
 				rm(curfd, &error);
 				break;	
 
@@ -605,12 +604,14 @@ fileT* opn(int flag, int connfd, int *error){
         		case OPN:
         			if(icl_hash_find(file_server, path) == NULL);
         				answer = -1;
+        			free(path);
         			break;
 
         		case OPNC:
         			LOCK(&servermtx);
         			if((tmp = icl_hash_find(file_server, path)) == NULL){
         				UNLOCK(&servermtx);
+        				free(path);
         				answer = -1;
         			}
 	        			    			
@@ -626,6 +627,13 @@ fileT* opn(int flag, int connfd, int *error){
 	    					tmp->user = connfd;
 	    				}
 	    				UNLOCK(&tmp->filemtx);
+	    				free(path);
+	    			}
+
+	    			if(answer != -1){
+	    				LOCK(&filesopenedmtx);
+	    				insert_listfiles(connfd, &tmp, &filesopened);
+	    				UNLOCK(&filesopenedmtx);
 	    			}
 
         			break;
@@ -634,6 +642,7 @@ fileT* opn(int flag, int connfd, int *error){
            			LOCK(&servermtx);
         			if((tmp = icl_hash_find(file_server, path)) == NULL){
         				UNLOCK(&servermtx);
+        				free(path);
         				answer = -1;
         			}
 	        			    			
@@ -679,7 +688,6 @@ fileT* opn(int flag, int connfd, int *error){
 	    			}
 	    			else {
 	    				UNLOCK(&servermtx);
-	    				free(path);
 	    				*error = 1;
 	    				answer = -1;	
 	    			}
@@ -694,6 +702,8 @@ fileT* opn(int flag, int connfd, int *error){
         	}
    		}
    		printf("open\n");
+   		if(answer == -1)
+   			free(path);
    		if(writen(connfd, &answer, sizeof(int)) == -1){
    			*error = 1;
    			return NULL;
@@ -758,8 +768,6 @@ int wrt(int connfd, int *error){
 	LOCK(&serverstatsmtx);
 	printf("write8\n");
 	while((configs.MAX_FILE_NUMBER - file_stored) <= 0 || (configs.SERVER_CAPACITY_BYTES - bytes_used) < dim){
-		printf("SIZE %d\n",configs.MAX_FILE_NUMBER - file_stored);
-		printf("SIZE %d %d\n",configs.SERVER_CAPACITY_BYTES - bytes_used, dim);
 		if((dimfreed = fifo_remove(connfd)) == -1){				//il rimpiazzamento può fallire perchè tutti i file o alcuni sono lockati e non posso toglierli
 			answer2 = -1;
 			icl_hash_delete(file_server, tmp->key, NULL, NULL);
@@ -901,6 +909,7 @@ int cls(int connfd,char* pathname){
 	LOCK(&servermtx);
 	if((tmp = icl_hash_find(file_server, pathname)) != NULL){
 		if(connfd == tmp->user){
+			printf("answer %d\n",answer);
 			LOCK(&tmp->filemtx);
 			UNLOCK(&servermtx);
 			tmp->open_create = 0;
@@ -916,7 +925,7 @@ int cls(int connfd,char* pathname){
 		UNLOCK(&tmp->filemtx);
 		answer = -1;
 	}
-
+	printf("answer %d\n",answer);
 	return answer;
 }
 
@@ -1197,3 +1206,144 @@ int fifo_remove_equal(char *pathname){
 	return 0;
 }
 
+
+
+int app(int connfd, int *error){
+	int answer = 0;
+	size_t answer2 = 0;
+	fileT *tmp;
+	char *contenuto;
+	size_t dim;
+	printf("app0\n");
+	tmp = opn(OPNC,connfd, error);
+	if(*error == 1){
+		printf("error %d\n",*error);
+		*error = 0;
+		return -1;
+	}
+	printf("app1\n");
+	LOCK(&servermtx);
+	LOCK(&tmp->filemtx);
+	UNLOCK(&servermtx);
+	printf("app2\n");
+	if(readn(connfd, &dim, sizeof(size_t)) == -1){			//leggo dimensione dell'append
+		*error = 1;
+		UNLOCK(&tmp->filemtx);
+		return -1;
+	}
+	printf("app3\n");
+	if((contenuto = malloc(sizeof(char) * dim)) == NULL){	//alloco dimensione dell'append
+		*error = 1;
+		UNLOCK(&tmp->filemtx);
+		return -1;
+	}
+	printf("app4\n");
+	memset(contenuto,'\0',dim);
+	printf("app5\n");
+	if(readn(connfd, (void*)contenuto, dim)== -1){				//leggo contenuto del dell'append
+		*error = 1;
+		free(contenuto);
+		UNLOCK(&tmp->filemtx);
+		return -1;
+	}
+
+	//controllo che il file abbia dimensione minore della dimensione massima del server, se così non fosse allora non lo memorizzo e invio risposta negativa al client
+	if(dim >= configs.SERVER_CAPACITY_BYTES){
+		answer2 = -1;
+		answer = -1;
+		UNLOCK(&tmp->filemtx);
+		if(writen(connfd, &answer2, sizeof(size_t)) == -1){	// mando risposta che non ci sono più file rimpiazzati per sbloccare il while nell'api
+			*error = 1;
+			free(contenuto);
+			return -1;
+		}
+		if(writen(connfd, &answer, sizeof(int)) == -1){	// dico al client che la richiesta è fallita
+			*error = 1;
+			free(contenuto);
+			return -1;
+		}
+	}
+
+
+	size_t dimfreed;
+	//se non ho spazio a sufficienza nel server allora applico il rimpiazzamento
+	LOCK(&servermtx);
+	LOCK(&serverstatsmtx);
+
+	while((configs.SERVER_CAPACITY_BYTES - bytes_used) < dim){
+		if((dimfreed = fifo_remove(connfd)) == -1){				//il rimpiazzamento può fallire perchè tutti i file o alcuni sono lockati e non posso toglierli
+			answer2 = -1;
+			answer = -1;
+			UNLOCK(&tmp->filemtx);
+			UNLOCK(&servermtx);
+			UNLOCK(&serverstatsmtx);
+			if(writen(connfd, &answer2, sizeof(size_t)) == -1){
+				*error = 1;
+				free(contenuto);
+				return -1;
+			}
+			if(writen(connfd, &answer, sizeof(int)) == -1){	// dico al client che la richiesta è fallita
+				*error = 1;
+				free(contenuto);
+				return -1;
+			}
+			free(contenuto);
+			return -1;
+		}
+		else{
+			bytes_used = bytes_used - dimfreed; 
+		}
+
+	}
+
+	UNLOCK(&serverstatsmtx);
+	UNLOCK(&servermtx);
+
+	answer2 = 0; //mando risposta al server dicendo che non ci sono più file rimpiazzati spediti
+	if(writen(connfd, &answer2, sizeof(size_t)) == -1){
+		*error = 1;
+		free(contenuto);
+		UNLOCK(&tmp->filemtx);
+		return -1;
+	}
+
+
+	//aggiungo la size e il contenuto del file nel server
+	if(answer != -1){
+	   	tmp->data = realloc(tmp->data, tmp->size+dim);
+	   	char *memtmp = (char*)tmp->data;
+	   	memcpy((void*)&memtmp[tmp->size], contenuto, dim);
+		//memcpy(&(tmp->data[tmp->size]), contenuto, dim);
+	   	tmp->size = tmp->size + dim;
+	}
+
+	//aggiorno le stats del server
+	if(answer != -1){
+		LOCK(&serverstatsmtx);
+		bytes_used = bytes_used + (long)dim;
+		if(bytes_used > out_put.max_size_reached)
+			out_put.max_size_reached = bytes_used;
+		UNLOCK(&serverstatsmtx);
+	}
+
+
+	//mando risposta al client
+	if(writen(connfd, &answer, sizeof(int)) == -1){
+		*error = 1;
+		free(contenuto);
+		UNLOCK(&tmp->filemtx);
+		return -1;
+	}
+	UNLOCK(&tmp->filemtx);
+
+	//chiudo il file una volta che ci ho scritto
+	if(cls(connfd,tmp->key) == -1){
+		*error = 1;
+		free(contenuto);
+		return -1;
+	}
+
+	answer = (int)answer2;
+	free(contenuto);
+	return answer;
+}
