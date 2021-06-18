@@ -113,7 +113,7 @@ static int save_file(const char *fileToStore,char *dirname, size_t filesize){		/
 		return -1;
 	}
 
-	if(writen(fd_file, fileToStore, filesize) == -1){
+	if(writen(fd_file, (void*)fileToStore, filesize) == -1){
 		perror("writen");
 		free(dirfile);
 		close(fd_file);
@@ -332,7 +332,7 @@ int writeFile(const char* pathname, const char*dirname){
 		}
 
 		//funzione che salva il file nella cartella dirname
-		save_file(fileRimpiazzato, dirname, answer);
+		save_file(fileRimpiazzato, (char*)dirname, answer);
 		free(fileRimpiazzato);
 		number++;
 	}
@@ -419,7 +419,7 @@ int removeFile(const char* pathname){
 	}
 
 	size_t lenght = strlen(pathname)+1;
-	printf("len %d\n",lenght);
+
 	if(writen(client_fd,&lenght, sizeof(size_t)) == -1){		//mando la lunghezza del pathname
 		errno = ECANCELED;
 		return -1;
@@ -455,7 +455,7 @@ int lockFile(const char* pathname){
 	}
 
 	size_t lenght = strlen(pathname)+1;
-	printf("len %d\n",lenght);
+
 	if(writen(client_fd, &lenght, sizeof(size_t)) == -1){		//mando la lunghezza del pathname
 		errno = ECANCELED;
 		return -1;
@@ -481,10 +481,10 @@ int lockFile(const char* pathname){
 
 int readNFiles(int N, const char* dirname){
 	int request = RDN;
-	printf("sono qua 1\n");
+
 	if(writen(client_fd, &request, sizeof(request)) == -1){		//mando il tipo di richiesta
 		errno = ECANCELED;
-		printf("sono qua 1\n");
+
 		return -1;
 	}
 	int numerofiles = N;
@@ -567,9 +567,12 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
 	int request = APP;
 	int answer = 0;
 	size_t answer2 = 0;
+	if(print_flag)
+			printf("richiesta di append per il file <%s>\n",pathname);
 
 	if(writen(client_fd, &request, sizeof(request)) == -1){		//mando il tipo di richiesta
 		errno = ECANCELED;
+
 		return -1;
 	}
 
@@ -615,7 +618,7 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
 			errno = ECANCELED;
 			return -1;
 		}
-		printf("dim ricev %zu\n", answer);
+
 		if(answer == 0 || answer == -1){
 			stop = 1;
 			break;
@@ -631,13 +634,13 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
 			return -1;
 		}
 
-		save_file(fileRimpiazzato, dirname, answer);
+		save_file(fileRimpiazzato, (char*)dirname, answer);
 
 		free(fileRimpiazzato);
 		number ++;
 	}
 
-	if(readn(client_fd, answer, sizeof(int)) == -1){		//ricevo la risposta dell'esito dell'append
+	if(readn(client_fd, &answer, sizeof(int)) == -1){		//ricevo la risposta dell'esito dell'append
 			errno = ECANCELED;
 			return -1;
 	}
