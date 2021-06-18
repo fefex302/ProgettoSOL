@@ -55,6 +55,8 @@ int w_req( const char* nomedir, long* n );
 int c_req(char *args);
 int l_req(char* args);
 int R_req(long N, char *dirname);
+int app_req(char *args);
+
 char *replaceDirname = NULL;
 
 typedef struct _arg_list{
@@ -171,7 +173,7 @@ int main(int argc,char* argv[]){
 	char wdirname[MAX_FILE_NAME];
 	memset(wdirname,'\0',MAX_FILE_NAME);
 
-	while ((opt = getopt(argc,argv, ":hf:w:W:r:R:d:t:l:u:c:p")) != -1 && !end) {
+	while ((opt = getopt(argc,argv, ":hf:w:W:r:R:d:D:t:a:l:u:c:p")) != -1 && !end) {
 		switch(opt) {
 			case 'h':  
 				break;
@@ -201,7 +203,7 @@ int main(int argc,char* argv[]){
 				break;
 			case 'd': 
 				break;
-			case '-D': 
+			case 'D': 
 				break;
 			case 't':  
 				isNumber(optarg, (long *)&timetosleep);
@@ -216,6 +218,9 @@ int main(int argc,char* argv[]){
 				c_req(optarg);
 				break;
 			case 'p': 
+				break;
+			case 'a':
+				app_req(optarg);
 				break;
 			case ':': 
 				switch(optopt){
@@ -611,4 +616,39 @@ int R_req(long N, char *dirname){
 		}
 	}
 	return 0;
+}
+
+
+int app_req(char *args){
+	if(!args)
+		return -1;
+	char *tmpstr;		
+	printf("args %s\n",args);											
+	char *token = strtok_r(args, ",", &tmpstr);
+	char *filedest;
+	char *filetoappend;
+	filedest = realpath(token, NULL); //path da leggere
+	token = strtok_r(NULL, ",", &tmpstr);
+	filetoappend = realpath(token, NULL);
+
+	int fd_file;
+	if((fd_file = open(filetoappend,O_RDONLY)) == -1)								
+		return -1;															
+	
+	struct stat buf;
+	if(fstat(fd_file, &buf) == -1)
+		return -1;
+
+	size_t size = buf.st_size;
+	char *file_return;
+
+	if((file_return = malloc(buf.st_size+1)) == NULL)
+		return -1;
+	
+	if(readn(fd_file, file_return, buf.st_size+1) == -1)
+		return -1;
+
+	close(fd_file);
+
+	return appendToFile(filedest, (void *)file_return, size, replaceDirname);
 }
