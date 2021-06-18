@@ -166,7 +166,7 @@ int openConnection( const char* sockname, int msec,const struct timespec abstime
 
     }while(current_time.tv_sec < abstime.tv_sec ||
         current_time.tv_nsec < abstime.tv_nsec);
-
+    errno = ETIMEDOUT;
     return -1;
 }
 
@@ -235,21 +235,27 @@ int openFile(const char* pathname, int flags){
 	int answer;
 
 	if(openwrite == 0){
-		if(writen(client_fd, &request, sizeof(request)) == -1)		//mando il tipo di richiesta
+		if(writen(client_fd, &request, sizeof(request)) == -1){		//mando il tipo di richiesta
+			errno = ECANCELED;
 			return -1;
+		}
 	}
 	else 
 		openwrite = 0;
 
 	size_t lenght = strlen(pathname)+1;
-	if(writen(client_fd, &lenght, sizeof(size_t)) == -1)		//mando la lunghezza del pathname
+	if(writen(client_fd, &lenght, sizeof(size_t)) == -1){		//mando la lunghezza del pathname
+		errno = ECANCELED;
 		return -1;
-
-	if(writen(client_fd, (void * )pathname, lenght) == -1)				//mando il pathname
+	}
+	if(writen(client_fd, (void * )pathname, lenght) == -1){				//mando il pathname
+		errno = ECANCELED;
 		return -1;
-
-	if(readn(client_fd, &answer, sizeof(answer)) == -1)		//ricevo la risposta dal server
+	}
+	if(readn(client_fd, &answer, sizeof(answer)) == -1){		//ricevo la risposta dal server
+		errno = ECANCELED;
 		return -1;
+	}
 
 	if(answer == -1){
 		errno = ECANCELED;
@@ -274,6 +280,7 @@ int writeFile(const char* pathname, const char*dirname){
 	if((file_to_send = read_file(fd_file, pathname, &size)) == NULL){
 		if(print_flag)
 			printf("file <%s> inesistente\n",pathname);
+		errno = EINVAL;
 		return -1;
 	}
 
@@ -295,14 +302,13 @@ int writeFile(const char* pathname, const char*dirname){
 		return -1;
 	}
 
-	printf("QUA1\n");
 	
 	if(writen(client_fd, file_to_send, size) == -1){
 		errno = ECANCELED;										//mando il file
 		free(file_to_send);
 		return -1;
 	}
-	printf("QUA2\n");
+
 	free(file_to_send);
 	size_t answer;
 	char *fileRimpiazzato = NULL;
@@ -317,7 +323,6 @@ int writeFile(const char* pathname, const char*dirname){
 			errno = ECANCELED;
 			return -1;
 		}
-		printf("dim recev %zu\n", answer);
 		if(answer == 0 || answer == -1){
 			stop = 1;
 			break;
@@ -336,12 +341,12 @@ int writeFile(const char* pathname, const char*dirname){
 		free(fileRimpiazzato);
 		number++;
 	}
-	printf("QUA3\n");
+
 	if(readn(client_fd, &answer, sizeof(size_t)) == -1){		//ricevo la risposta dal server
 		errno = ECANCELED;
 		return -1;
 	}
-	printf("QUA4\n");
+
 	if(answer == -1){
 		if(print_flag)
 			printf("la richiesta di scrittura del file <%s> è fallita\n",pathname);
