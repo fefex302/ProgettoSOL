@@ -199,19 +199,24 @@ int main(int argc,char *argv[]){
 		}
 	}
 
+	//controllo che i valori siano inizializzati correttamente
 	if(config_values_correctly_initialized(&configs) != 1)
 		exit(EXIT_FAILURE);
 
 	fclose(config_file);
 
 	configs.SERVER_CAPACITY_BYTES = configs.SERVER_CAPACITY_MBYTES * 1000000;
-	
+
+	//creo la tabella hash che memorizzerà i files
 	file_server = icl_hash_create(50, NULL, NULL);
 	pthread_t *tids;
+
+	//inizializzo i dati di output
 	out_put.max_file_stored = 0;
 	out_put.max_size_reached = 0;
 	out_put.replace_algo = 0;
 
+	//creo una struttura dove andrò a memorizzare i tid dei thread lanciati
 	if((tids = malloc(configs.NUM_THREADS * (sizeof(pthread_t)))) == NULL)
 		NULL_EXIT(tids = malloc(configs.NUM_THREADS * (sizeof(pthread_t))),"malloc");
 	//inizializzo i tids a 0
@@ -246,14 +251,7 @@ int main(int argc,char *argv[]){
     // tengo traccia del file descriptor con id piu' grande
     int fdmax = listenfd; 
 
-  	//potrei avere un caso raro dove il segnale arriva dopo il controllo dei valori stop o quit e prima della select
-  	//quindi mi imposto un timeout di 5 secondi e controllo se fosse arrivato un segnale
-  	//struct timeval select_timeout;	
- 
-
     while(!quit && !stop){
-    	//select_timeout.tv_usec = 0;
-  		//select_timeout.tv_sec = 5;
     	tmpset = set;
     	if(!quit){
     		if(!stop){
@@ -277,7 +275,6 @@ int main(int argc,char *argv[]){
 	// cerchiamo di capire da quale fd abbiamo ricevuto una richiesta
 		for(int i=0; i <= fdmax; i++) {
 		    if (FD_ISSET(i, &tmpset)) {
-		    	printf("i %d\n",i);
 		    
 				long connfd;
 
@@ -342,25 +339,24 @@ int main(int argc,char *argv[]){
 		}
 
     }
-    printf("esco\n");
+
     if(stop == 1){
     	LOCK(&bufmtx);
     	for(i = 0; i < active_threads; i ++){
     		if(insert_node(-2, &last, &requests) == -1)
     			if(insert_node(-2, &last, &requests) == -1){
-    				printf("esco8\n");
+
     				exit(1);
     			}
     		numreq ++;
-    		printf("esco7\n");
+
 		}
-		printf("esco6\n");
+
 		UNLOCK(&bufmtx);
 	}
 
-    printf("esco5\n");
 	SIGNAL(&bufcond);
-	printf("esco9\n");
+
     for(i = 0; i < active_threads; i++){
     	if (pthread_join(tids[i], NULL) != 0) {
 			fprintf(stderr, "pthread_join failed\n");
@@ -368,7 +364,7 @@ int main(int argc,char *argv[]){
 	    }
 	    printf("thread joinato\n");
     }
-    printf("esco2\n");
+
     free(tids);
     fifoStruct *tmp;
     while(fifoqueue != NULL){
@@ -376,7 +372,7 @@ int main(int argc,char *argv[]){
     	fifoqueue = fifoqueue->next;
     	free(tmp);
     }
-    printf("esco3\n");
+
     icl_hash_destroy(file_server, NULL, NULL);
     printf("il numero massimo di file memorizzati nel server è stato %d \n",out_put.max_file_stored);
     printf("il numero massimo di spazio utilizzato nel server è stato %d \n",out_put.max_size_reached);
@@ -556,14 +552,14 @@ void *worker_t(void *args){
 			close(curfd);
 		}
 		else if((int)codreq != CLOSE){
-			printf("ret: %d\n",curfd);
+
 			if(write(pfd[1], &curfd, sizeof(int)) == -1){
 				if(write(pfd[1], &curfd, sizeof(int)) == -1){
 					printf("fail\n");
 					close(curfd);
 				}
 			}
-			printf("ret: %d\n",curfd);
+
 		}
 		error = 0;
 	}
@@ -572,7 +568,7 @@ void *worker_t(void *args){
 
 
 fileT* opn(int flag, int connfd, int *error){
-	printf("open\n");
+
 		size_t dimpath;
 	    char* path = NULL;
 	    fileT *tmp = NULL;
@@ -671,9 +667,9 @@ fileT* opn(int flag, int connfd, int *error){
 
         		case OPNCL:
         			LOCK(&servermtx);
-        			printf("open1\n");
+ 
         			if((tmp = icl_hash_find(file_server, path)) == NULL){
-        				printf("open2\n");
+
 	        			if((tmp = icl_hash_insert(file_server, path, NULL)) == NULL){
 	        				UNLOCK(&servermtx);
 	        				answer = -1;
@@ -692,7 +688,6 @@ fileT* opn(int flag, int connfd, int *error){
 	    				answer = -1;	
 	    			}
 
-	    			printf("open3\n");
     				if(answer != -1){
 	    				LOCK(&filesopenedmtx);
 	    				insert_listfiles(connfd, &tmp, &filesopened);
@@ -701,7 +696,7 @@ fileT* opn(int flag, int connfd, int *error){
         			break;
         	}
    		}
-   		printf("open\n");
+
    		if(answer == -1)
    			free(path);
    		if(writen(connfd, &answer, sizeof(int)) == -1){
@@ -721,52 +716,49 @@ int wrt(int connfd, int *error){
 
 	tmp = opn(OPNCL,connfd, error);
 	if(*error == 1){
-		printf("error %d\n",*error);
 		*error = 0;
 		return -1;
 	}
-	printf("write1\n");
+
 	LOCK(&tmp->filemtx);
-	printf("write2\n");
+
 	if(readn(connfd, &dim, sizeof(size_t)) == -1){			//leggo dimensione del file
 		*error = 1;
 		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
-	printf("write3\n");
+
 	if((contenuto = malloc(sizeof(char) * dim)) == NULL){	//alloco dimensione file
 		*error = 1;
 		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
-	printf("write4\n");
+
 	memset(contenuto,'\0',dim);
-	printf("write5\n");
+
 	if(readn(connfd, contenuto, dim)== -1){				//leggo contenuto del file
 		*error = 1;
+		free(contenuto);
 		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
-	printf("write6\n");
+
 	//controllo che il file abbia dimensione minore della dimensione massima del server, se così non fosse allora non lo memorizzo e invio risposta negativa al client
 	if(dim >= configs.SERVER_CAPACITY_BYTES){
 		answer2 = -1;
 		icl_hash_delete(file_server, tmp->key, NULL, NULL);
 		UNLOCK(&servermtx);
-		LOCK(&serverstatsmtx);
-		file_stored --;
-		UNLOCK(&serverstatsmtx);
 		if(writen(connfd, &answer2, sizeof(size_t)) == -1){
 			*error = 1;
 			return -1;
 		}
 	}
-	printf("write7\n");
+
 	size_t dimfreed;
-	//se non ho spazio a sufficienza nel server allora applico il rimpiazzamento
 	LOCK(&servermtx);
 	LOCK(&serverstatsmtx);
-	printf("write8\n");
+
+	//se non ho spazio a sufficienza nel server allora applico il rimpiazzamento
 	while((configs.MAX_FILE_NUMBER - file_stored) <= 0 || (configs.SERVER_CAPACITY_BYTES - bytes_used) < dim){
 		if((dimfreed = fifo_remove(connfd)) == -1){				//il rimpiazzamento può fallire perchè tutti i file o alcuni sono lockati e non posso toglierli
 			answer2 = -1;
@@ -784,7 +776,6 @@ int wrt(int connfd, int *error){
 		}
 
 	}
-	printf("write9\n");
 
 	answer2 = 0; //mando risposta al server dicendo che non ci sono più file rimpiazzati spediti
 	if(writen(connfd, &answer2, sizeof(size_t)) == -1){
@@ -798,11 +789,11 @@ int wrt(int connfd, int *error){
 	UNLOCK(&servermtx);
 
 	fifo_insert(tmp);
-	printf("write10\n");
+
 
 	//aggiungo la size e il contenuto del file nel server
 	if(answer != -1){
-		printf("write11\n");
+
 	   	if(tmp->open_lock == 1 && tmp->open_create == 1){
 	    	if(answer != -1){
 	    		tmp->size = dim;
@@ -820,20 +811,20 @@ int wrt(int connfd, int *error){
 	if(file_stored > out_put.max_file_stored)
 		out_put.max_file_stored = file_stored;
 	UNLOCK(&serverstatsmtx);
-	printf("write12\n");
+
 	//mando risposta al client
 	if(writen(connfd, &answer2, sizeof(size_t)) == -1){
 		*error = 1;
 		return -1;
 	}
 	UNLOCK(&tmp->filemtx);
-	printf("write12\n");
+
 	//chiudo il file una volta che ci ho scritto
 	if(cls(connfd,tmp->key) == -1){
 		*error = 1;
 		return -1;
 	}
-	printf("write13\n");
+
 	answer = (int)answer2;
 	return answer;
 }
@@ -909,7 +900,7 @@ int cls(int connfd,char* pathname){
 	LOCK(&servermtx);
 	if((tmp = icl_hash_find(file_server, pathname)) != NULL){
 		if(connfd == tmp->user){
-			printf("answer %d\n",answer);
+
 			LOCK(&tmp->filemtx);
 			UNLOCK(&servermtx);
 			tmp->open_create = 0;
@@ -925,7 +916,7 @@ int cls(int connfd,char* pathname){
 		UNLOCK(&tmp->filemtx);
 		answer = -1;
 	}
-	printf("answer %d\n",answer);
+
 	return answer;
 }
 
@@ -975,7 +966,7 @@ int rd(int connfd, int *error){
 	else
 		dimfile = -1;
 
-	printf("answer %d\n",answer);
+
 	if(writen(connfd, &dimfile, sizeof(size_t)) == -1){	//mando la size del file, in caso il file non esista mando -1
 		*error = 1;
 		UNLOCK(&tmp->filemtx);
@@ -985,7 +976,7 @@ int rd(int connfd, int *error){
 	if(answer == -1){
 		return -1;
 	}
-		printf("answer %d\n",answer);
+
 	if(writen(connfd, tmp->data, tmp->size) == -1){	//mando il file
 		*error = 1;
 		UNLOCK(&tmp->filemtx);
@@ -1053,14 +1044,14 @@ int lo(int connfd, int *error){
 }
 
 int rdn(int connfd, int *error){
-	printf("sono qua 1\n");
+
 	int numfile;
 	if(readn(connfd, &numfile, sizeof(int)) == -1){
 		*error = 1;
 		return -1;
 	}
 
-	printf("sono qua 1\n");
+
 
 
 	size_t filesize = 0;
@@ -1075,7 +1066,7 @@ int rdn(int connfd, int *error){
 		//non voglio inviare un file che deve essere ancora scritto
 		if(tmp->fileInServer->open_create != 1){
 			filesize = tmp->fileInServer->size;
-			printf("size of file %zu\n", filesize);
+
 			if(writen(connfd, &filesize, sizeof(size_t)) == -1){
 				UNLOCK(&tmp->fileInServer->filemtx);
 				UNLOCK(&fifoqueuemtx);
@@ -1133,12 +1124,12 @@ int fifo_remove(int connfd){
 	fifoStruct *tmp = NULL;
 	fifoStruct *curr = fifoqueue;
 	int retval = 0;
-	printf("fifo queue1\n");
+
 	LOCK(&fifoqueuemtx);
-		printf("fifo queue2\n");
+
 	while(curr != NULL ){
 		if(curr->fileInServer->open_lock == 0 && curr->fileInServer->open_create == 0){
-				printf("fifo queue3\n");
+
 			LOCK(&curr->fileInServer->filemtx);
 			DimFreed = curr->fileInServer->size;
 			if(tmp != NULL){
@@ -1150,19 +1141,19 @@ int fifo_remove(int connfd){
 			if(fifoqueue == NULL)
 				fifoqueueLast = NULL;
 
-			printf("difreed %zu\n", DimFreed);
+
 			if(writen(connfd, &DimFreed, sizeof(size_t)) == -1){
 				UNLOCK(&curr->fileInServer->filemtx);
 				UNLOCK(&fifoqueuemtx);			//mando dim del file
 				return -1;
 			}
-			printf("fifo queuewr\n");
+
 			if(writen(connfd, curr->fileInServer->data, DimFreed) == -1){
 				UNLOCK(&curr->fileInServer->filemtx);
 				UNLOCK(&fifoqueuemtx);			//mando il file
 				return -1;
 			}
-			printf("fifo queuewr2\n");
+
 
 			retval = icl_hash_delete(file_server, curr->fileInServer->key, NULL, NULL);
 			if(retval == -1){
@@ -1170,18 +1161,18 @@ int fifo_remove(int connfd){
 				UNLOCK(&fifoqueuemtx);
 				return -1;
 			}
-							printf("fifo queuedelete\n");
+
 
 			free(curr);
 			break;
 		}
-			printf("fifo queue4\n");
+
 		tmp = curr;
 		curr = curr->next;
 	}
-		printf("fifo queue5\n");
+
 	UNLOCK(&fifoqueuemtx);
-		printf("fifo queue6\n");
+
 	return DimFreed;
 }
 
@@ -1214,32 +1205,32 @@ int app(int connfd, int *error){
 	fileT *tmp;
 	char *contenuto;
 	size_t dim;
-	printf("app0\n");
+
 	tmp = opn(OPNC,connfd, error);
 	if(*error == 1){
 		printf("error %d\n",*error);
 		*error = 0;
 		return -1;
 	}
-	printf("app1\n");
+
 	LOCK(&servermtx);
 	LOCK(&tmp->filemtx);
 	UNLOCK(&servermtx);
-	printf("app2\n");
+
 	if(readn(connfd, &dim, sizeof(size_t)) == -1){			//leggo dimensione dell'append
 		*error = 1;
 		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
-	printf("app3\n");
+
 	if((contenuto = malloc(sizeof(char) * dim)) == NULL){	//alloco dimensione dell'append
 		*error = 1;
 		UNLOCK(&tmp->filemtx);
 		return -1;
 	}
-	printf("app4\n");
+
 	memset(contenuto,'\0',dim);
-	printf("app5\n");
+
 	if(readn(connfd, (void*)contenuto, dim)== -1){				//leggo contenuto del dell'append
 		*error = 1;
 		free(contenuto);
