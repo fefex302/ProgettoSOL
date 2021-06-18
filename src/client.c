@@ -90,7 +90,6 @@ int main(int argc,char* argv[]){
 	for(int i = 1; i<argc; i++){
 		if(strncmp(argv[i],"-d",3) == 0){
 			d = i;
-			printf("indice %d\n",d);
 		}
 		else if(strcmp(argv[i],"-r") == 0)
 			r = i;
@@ -300,11 +299,10 @@ int w_parse(char *args, char *wdirname, long *nFileToSend){
 		i++;
 	if(args[i] != '\0'){
 		strncpy(wdirname, args, i);
-		printf("DIRNAME %s\n",wdirname);
 		char aux[11];
 		memset(aux,'\0',11);
 		strncpy(aux, args+i+1, 11);
-		printf("AUX %s\n",aux);
+
 		if(aux[0] != 'n' && aux[1]!= '=')
 			return -1;
 		else {
@@ -314,7 +312,6 @@ int w_parse(char *args, char *wdirname, long *nFileToSend){
 	}
 	else{
 		strncpy(wdirname, args, i+1);
-		printf("DIRNAME %s\n",wdirname);
 	}
 
 	return 0;
@@ -349,7 +346,7 @@ int w_req( const char* nomedir, long* n ){
             strncpy(filename, nomedir, MAX_FILE_NAME-1);
             strncat(filename, "/", MAX_FILE_NAME-1);
             strncat(filename, file->d_name, MAX_FILE_NAME-1);
-	fprintf(stdout, "Nome del file che sto esaminando: '%s'\n", filename);
+
             if(stat(filename, &statbuf)==-1) {
               perror("eseguendo la stat");
               fprintf(stderr, "ERROR: Error in file %s\n", filename);
@@ -358,17 +355,16 @@ int w_req( const char* nomedir, long* n ){
 
             if(S_ISDIR(statbuf.st_mode)){
                       if ( !isdot(filename) ){
-	fprintf(stdout, "L'elemento che sto per visitare è una directory di nome '%s'\n", filename);
                           int res = w_req(filename,n);
                           if(res == -1) return -1;
                       }
             }else{
-            	printf("scrivo il file\n");
                 *n = *n - 1;
                W_req(filename,NULL);
            }
         }
-        if (errno != 0) perror("readdir");
+        if (errno != 0) 
+        	perror("readdir");
         closedir(dir);
         return 0;
     }
@@ -443,19 +439,20 @@ int W_req(char *args,char *dirname){				//args lista di file da scrivere separat
 		return -1;	
 
 	char *tmpstr;		
-	printf("args %s\n",args);											
+										
 	char *token = strtok_r(args, ",", &tmpstr);
 	char *resolvedpath;
-	printf("token %s\n",token);
+
 	while (token) {
-		printf("sto scrivendo il file\n");
+
 		resolvedpath = realpath(token, NULL);
 		if(!resolvedpath)
 			resolvedpath = realpath(token, NULL);
 		if(!resolvedpath){
 			free(resolvedpath);
 			if(print_flag)
-				printf("richiesta di scrittura del file <%s> è fallita a causa di realpath\n",token);
+				printf("richiesta di scrittura del file <%s> è fallita: file inesistente\n",token);
+			token = strtok_r(NULL, ",", &tmpstr);
 			continue;
 		}
 
