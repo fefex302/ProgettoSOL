@@ -59,8 +59,9 @@ static struct sockaddr_un server_address;
 int print_flag = 0;
 static int number = 0;
 //*************************************FUNZIONI STATICHE DI UTILITÀ***************************************************************
-static char* read_file(int fd_file,const char *file_path, size_t *size){		//legge un file e restituisce nel campo file_return 
-																				//una stringa contenente tutti i bit del file
+static char* read_file(const char *file_path, size_t *size){		//legge un file e restituisce nel campo file_return una stringa contenente tutti i bit del file
+	
+	int fd_file = 0;														
 	if((fd_file = open(file_path,O_RDONLY)) == -1)								
 		return NULL;															
 	
@@ -72,6 +73,7 @@ static char* read_file(int fd_file,const char *file_path, size_t *size){		//legg
 
 	if((file_return = malloc(buf.st_size+1)) == NULL)
 		return NULL;
+	memset(file_return, '\0', buf.st_size+1);
 	
 	if(readn(fd_file, file_return, buf.st_size+1) == -1)
 		return NULL;
@@ -87,8 +89,10 @@ static int save_file(const char *fileToStore,char *dirname, size_t filesize){		/
 	int len = strlen(dirname) + 1;		
 	int fd_file;
 	char str[10];
-			
-	char namefile[40] = {'f','i','l','e','E','s','p'};
+	memset(str,'\0',10);
+	char namefile[40] = {'f','i','l','e','E','s','p','\0'};
+	for(int i = 8; i < 40; i++)
+		namefile[i] = '\0';
 	if(sprintf(str, "%d", number) <0){
 		return -1;
 	}
@@ -273,11 +277,10 @@ int writeFile(const char* pathname, const char*dirname){
 	int request = WRT;
 	openwrite = 1;
 	int retval = 0;
-	int fd_file;
 	char* file_to_send = NULL;
 	size_t size;
 
-	if((file_to_send = read_file(fd_file, pathname, &size)) == NULL){
+	if((file_to_send = read_file(pathname, &size)) == NULL){
 		if(print_flag)
 			printf("file <%s> inesistente\n",pathname);
 		errno = EINVAL;
@@ -331,6 +334,7 @@ int writeFile(const char* pathname, const char*dirname){
 		fileRimpiazzato = malloc(answer);
 		if(!fileRimpiazzato)
 			return -1;
+		memset(fileRimpiazzato, '\0', answer);
 		if(readn(client_fd, fileRimpiazzato, answer) == -1){		
 			errno = ECANCELED;
 			return -1;
@@ -522,7 +526,10 @@ int readNFiles(int N, const char* dirname){
 			if(dirname != NULL){
 				int fd_file;
 				char str[10];
-				char namefile[40] = {'f','i','l','e'};
+				memset(str,'\0',10);
+				char namefile[40] = {'f','i','l','e','\0'};
+				for(int i = 5; i < 40; i++)
+					namefile[i] = '\0';
 				if(sprintf(str, "%d", n) <0){
 					free(file_to_read);
 					continue;
@@ -634,6 +641,7 @@ int appendToFile(const char* pathname, void* buf, size_t size, const char* dirna
 			errno = ENOMEM;
 			return -1;
 		}
+		memset(fileRimpiazzato, '\0', answer);
 		if(readn(client_fd, fileRimpiazzato, answer) == -1){		
 			errno = ECANCELED;
 			return -1;
