@@ -544,7 +544,7 @@ void *worker_t(void *args){
 				return NULL;//richiesta di chiusura del thread
 
 			default://in caso di fallimento di lettura della richiesta o richiesta non valida chiudo la connessione
-				close(curfd);
+				error = 1;
 				break;
 
 		}
@@ -598,7 +598,7 @@ fileT* opn(int flag, int connfd, int *error){
         if(answer != -1){
         	switch(flag){
         		case OPN:
-        			if(icl_hash_find(file_server, path) == NULL);
+        			if(icl_hash_find(file_server, path) == NULL)
         				answer = -1;
         			free(path);
         			break;
@@ -719,18 +719,20 @@ int wrt(int connfd, int *error){
 		*error = 0;
 		return -1;
 	}
-
+	LOCK(&servermtx);
 	LOCK(&tmp->filemtx);
 
 	if(readn(connfd, &dim, sizeof(size_t)) == -1){			//leggo dimensione del file
 		*error = 1;
-		UNLOCK(&tmp->filemtx);
+		icl_hash_delete(file_server, tmp->key, NULL, NULL);
+		UNLOCK(&servermtx);
 		return -1;
 	}
 
 	if((contenuto = malloc(sizeof(char) * dim)) == NULL){	//alloco dimensione file
 		*error = 1;
-		UNLOCK(&tmp->filemtx);
+		icl_hash_delete(file_server, tmp->key, NULL, NULL);
+		UNLOCK(&servermtx);
 		return -1;
 	}
 
@@ -738,8 +740,9 @@ int wrt(int connfd, int *error){
 
 	if(readn(connfd, contenuto, dim)== -1){				//leggo contenuto del file
 		*error = 1;
+		icl_hash_delete(file_server, tmp->key, NULL, NULL);
 		free(contenuto);
-		UNLOCK(&tmp->filemtx);
+		UNLOCK(&servermtx);
 		return -1;
 	}
 
@@ -748,14 +751,22 @@ int wrt(int connfd, int *error){
 		answer2 = -1;
 		icl_hash_delete(file_server, tmp->key, NULL, NULL);
 		UNLOCK(&servermtx);
-		if(writen(connfd, &answer2, sizeof(size_t)) == -1){
+		answer2 = -1;
+		answer = -1;
+		if(writen(connfd, &answer2, sizeof(size_t)) == -1){	// mando risposta che non ci sono più file rimpiazzati per sbloccare il while nell'api
 			*error = 1;
+			free(contenuto);
 			return -1;
 		}
+		if(writen(connfd, &answer, sizeof(int)) == -1){	// dico al client che la richiesta è fallita
+			*error = 1;
+			free(contenuto);
+			return -1;
+		}
+		return -1;
 	}
 
 	size_t dimfreed;
-	LOCK(&servermtx);
 	LOCK(&serverstatsmtx);
 
 	//se non ho spazio a sufficienza nel server allora applico il rimpiazzamento
@@ -1253,6 +1264,7 @@ int app(int connfd, int *error){
 			free(contenuto);
 			return -1;
 		}
+		return -1;
 	}
 
 
