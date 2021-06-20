@@ -641,6 +641,7 @@ int app_req(char *args){
 
 	if((file_return = malloc(buf.st_size+1)) == NULL)
 		return -1;
+	memset(file_return, '\0', buf.st_size+1);
 	
 	if(readn(fd_file, file_return, buf.st_size+1) == -1)
 		return -1;
